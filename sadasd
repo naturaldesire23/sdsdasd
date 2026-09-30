@@ -3637,6 +3637,7 @@ Internal.Window.Open = function(config)
     window.Screen = screenGui
     Internal.Window.BindGameCursor(screenGui)
 
+    -- FIX: Create NotifyGui and its Container BEFORE anything that might trigger a notification
     local notifyGui = Env.Adopt(Internal.Util.New("ScreenGui", {
         Name = Env.RandomName(),
         ResetOnSpawn = false,
@@ -3647,8 +3648,7 @@ Internal.Window.Open = function(config)
         Parent = Env.PlayerGuiParent(),
     }))
     Env.PromoteGui(notifyGui, Env.NotifyDisplayOrder)
-    Internal.Env.NotifyGui = notifyGui
-
+    
     local notifyContainer = Internal.Util.New("Frame", {
         Name = "Container",
         AnchorPoint = Vector2.new(0.5, 0.5),
@@ -3658,6 +3658,9 @@ Internal.Window.Open = function(config)
         Parent = notifyGui,
     })
     Internal.Util.New("UIScale", { Scale = 1, Parent = notifyContainer })
+
+    -- Now assign it to the environment
+    Internal.Env.NotifyGui = notifyGui
 
     local layer = Internal.Util.New("Frame", {
         Name = "Layer",
