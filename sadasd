@@ -1,0 +1,4834 @@
+
+local ZenthraUI = {
+    Version = "1.0.0",
+    Flags = {},
+    Options = {},
+    Windows = {},
+    NotifyPositions = { "Right Bottom", "Right Top", "Left Bottom", "Left Top" },
+    Theme = {},
+    Binds = {},
+    Media = nil,
+    SheetApiUrl = "http://prem-eu4.bot-hosting.net:21456",
+}
+
+local Internal = {
+    Services = {},
+    State = { Saved = {}, Connections = {}, ThemeBindings = {}, FontCache = {} },
+    Icons = { Data = {} },
+    Theme = { Palette = {}, Defaults = nil },
+    Layout = {
+        FontFamily = "rbxasset://fonts/families/GothamSSm.json",
+        Weight = Enum.FontWeight,
+        Ease = Enum.EasingStyle.Quint,
+        EaseIn = Enum.EasingDirection.In,
+        Row = 24,
+        OptionH = 24,
+        FieldH = 30,
+        TabH = 30,
+        TabPad = 8,
+        TabGap = 2,
+        TabIndicatorSlide = 0.28,
+        Width = 680,
+        Height = 468,
+        TopbarH = 46,
+        SidebarW = 172,
+        ChipH = 16,
+    },
+    Config = { Folder = nil, Name = nil, Enabled = false, _queued = false },
+    Notify = { Width = 292, Gap = 8, Edge = 18, Position = "Right Bottom", Active = {}, Profiles = {}, Kinds = {} },
+    Binds = { List = {}, Listeners = {}, Binding = false },
+    Util = {},
+    Components = {},
+    Module = {},
+    Tab = {},
+    Page = {},
+    Window = { BlockDrag = false },
+}
+
+local Env = {
+    Clone = cloneref or function(obj) return obj end,
+    Filesystem = typeof(writefile) == "function" and typeof(readfile) == "function" and typeof(isfile) == "function" and typeof(isfolder) == "function",
+    Mobile = false,
+}
+
+Internal.Services.UserInput = Env.Clone(game:GetService("UserInputService"))
+Internal.Services.Gui = Env.Clone(game:GetService("GuiService"))
+Internal.Services.Tween = Env.Clone(game:GetService("TweenService"))
+Internal.Services.Http = Env.Clone(game:GetService("HttpService"))
+Internal.Services.Run = Env.Clone(game:GetService("RunService"))
+Internal.Services.Players = Env.Clone(game:GetService("Players"))
+Internal.Services.CoreGui = Env.Clone(game:GetService("CoreGui"))
+Internal.Services.LocalPlayer = Internal.Services.Players.LocalPlayer
+Env.Mobile = Internal.Services.UserInput.TouchEnabled and not Internal.Services.UserInput.KeyboardEnabled
+ZenthraUI.IsMobile = Env.Mobile
+
+Internal.Theme.Palette = {
+    Accent = Color3.fromRGB(88, 246, 249),
+    AccentSoft = Color3.fromRGB(198, 136, 206),
+    AccentDim = Color3.fromRGB(104, 104, 112),
+    Background = Color3.fromRGB(8, 8, 10),
+    Surface = Color3.fromRGB(16, 16, 19),
+    SurfaceAlt = Color3.fromRGB(25, 25, 30),
+    Border = Color3.fromRGB(40, 40, 46),
+    BorderSoft = Color3.fromRGB(28, 28, 33),
+    Text = Color3.fromRGB(246, 246, 249),
+    SubText = Color3.fromRGB(136, 136, 144),
+    Muted = Color3.fromRGB(92, 92, 100),
+    Danger = Color3.fromRGB(232, 94, 94),
+    Success = Color3.fromRGB(214, 214, 219),
+    Warning = Color3.fromRGB(226, 200, 100),
+}
+
+Internal.Theme.Defaults = table.clone(Internal.Theme.Palette)
+ZenthraUI.Theme = Internal.Theme.Palette
+
+local UserInput = Internal.Services.UserInput
+local Tween = Internal.Services.Tween
+local Run = Internal.Services.Run
+local Players = Internal.Services.Players
+local LocalPlayer = Internal.Services.LocalPlayer
+local CoreGui = Internal.Services.CoreGui
+local Http = Internal.Services.Http
+local palette = Internal.Theme.Palette
+
+Internal.Util.Font = function(weight)
+    weight = weight or Internal.Layout.Weight.Medium
+    local cached = Internal.State.FontCache[weight]
+    if not cached then
+        cached = Font.new(Internal.Layout.FontFamily, weight)
+        Internal.State.FontCache[weight] = cached
+    end
+    return cached
+end
+
+Internal.Util.Connect = function(signal, callback)
+    local conn = signal:Connect(callback)
+    table.insert(Internal.State.Connections, conn)
+    return conn
+end
+
+Internal.Util.New = function(className, props, children)
+    local instance = Instance.new(className)
+    local parent = nil
+    if props then
+        parent = props.Parent
+        props.Parent = nil
+        for k, v in pairs(props) do
+            instance[k] = v
+        end
+    end
+    if children then
+        for _, child in ipairs(children) do
+            child.Parent = instance
+        end
+    end
+    instance.Parent = parent
+    return instance
+end
+
+Internal.Util.Tween = function(instance, properties, duration, style, direction)
+    local tween = Tween:Create(instance, TweenInfo.new(duration or 0.22, style or Internal.Layout.Ease, direction or Enum.EasingDirection.Out), properties)
+    tween:Play()
+    return tween
+end
+
+Internal.Util.Corner = function(radius)
+    local r = typeof(radius) == "UDim" and radius
+    if not r then
+        r = UDim.new(0, radius or 6)
+    end
+    return Internal.Util.New("UICorner", { CornerRadius = r })
+end
+
+Internal.Util.Stroke = function(colorKey, thickness, transparency)
+    local stroke = Internal.Util.New("UIStroke", {
+        Thickness = thickness or 1,
+        Transparency = transparency or 0,
+        ApplyStrokeMode = Enum.ApplyStrokeMode.Border,
+    })
+    Internal.Theme.Bind(stroke, "Color", colorKey or "Border")
+    return stroke
+end
+
+Internal.Util.Gradient = function(colorResolver, transparency, rotation)
+    local grad = Internal.Util.New("UIGradient", {
+        Transparency = transparency or NumberSequence.new(0),
+        Rotation = rotation or 0,
+    })
+    if colorResolver then
+        Internal.Theme.BindDynamic(grad, "Color", colorResolver)
+    end
+    return grad
+end
+
+Internal.Util.Fade = function(...)
+    local points = {}
+    local count = select("#", ...)
+    for i, v in ipairs({ ... }) do
+        points[i] = NumberSequenceKeypoint.new((i - 1) / (count - 1), v)
+    end
+    return NumberSequence.new(points)
+end
+
+Internal.Util.Padding = function(top, bottom, left, right)
+    return Internal.Util.New("UIPadding", {
+        PaddingTop = UDim.new(0, top or 0),
+        PaddingBottom = UDim.new(0, bottom or top or 0),
+        PaddingLeft = UDim.new(0, left or 0),
+        PaddingRight = UDim.new(0, right or left or 0),
+    })
+end
+
+Internal.Util.List = function(padding, horizontalAlignment)
+    return Internal.Util.New("UIListLayout", {
+        Padding = UDim.new(0, padding or 0),
+        SortOrder = Enum.SortOrder.LayoutOrder,
+        HorizontalAlignment = horizontalAlignment or Enum.HorizontalAlignment.Left,
+    })
+end
+
+Internal.Util.FlexRow = function(padding)
+    return Internal.Util.New("UIListLayout", {
+        Padding = UDim.new(0, padding or 6),
+        FillDirection = Enum.FillDirection.Horizontal,
+        VerticalAlignment = Enum.VerticalAlignment.Center,
+        SortOrder = Enum.SortOrder.LayoutOrder,
+    })
+end
+
+Internal.Util.Grow = function()
+    return Internal.Util.New("UIFlexItem", { FlexMode = Enum.UIFlexMode.Fill })
+end
+
+Internal.Util.Label = function(props, children)
+    local weight = props.Weight
+    local colorKey = props.ColorKey
+    props.Weight = nil
+    props.ColorKey = nil
+    if props.BackgroundTransparency == nil then
+        props.BackgroundTransparency = 1
+    end
+    props.FontFace = Internal.Util.Font(weight or Internal.Layout.Weight.Medium)
+    props.TextSize = props.TextSize or 12
+    props.TextXAlignment = props.TextXAlignment or Enum.TextXAlignment.Left
+    props.AutoLocalize = false
+    local label = Internal.Util.New("TextLabel", props, children)
+    Internal.Theme.Bind(label, "TextColor3", colorKey or "Text")
+    return label
+end
+
+Internal.Util.Image = function(props, children)
+    local colorKey = props.ColorKey
+    props.ColorKey = nil
+    props.Image = Internal.Icons.Resolve(props.Image)
+    if props.BackgroundTransparency == nil then
+        props.BackgroundTransparency = 1
+    end
+    props.ScaleType = props.ScaleType or Enum.ScaleType.Fit
+    local img = Internal.Util.New("ImageLabel", props, children)
+    if colorKey then
+        Internal.Theme.Bind(img, "ImageColor3", colorKey)
+    end
+    return img
+end
+
+Internal.Util.Hover = function(button, onEnter, onLeave)
+    Internal.Util.Connect(button.MouseEnter, onEnter)
+    Internal.Util.Connect(button.MouseLeave, onLeave)
+end
+
+Internal.Util.Press = function(button, scaleTarget)
+    Internal.Util.Connect(button.MouseButton1Down, function()
+        Internal.Util.Tween(scaleTarget, { Scale = 0.97 }, 0.09)
+    end)
+    Internal.Util.Connect(button.MouseButton1Up, function()
+        Internal.Util.Tween(scaleTarget, { Scale = 1 }, 0.28, Enum.EasingStyle.Back)
+    end)
+    Internal.Util.Connect(button.MouseLeave, function()
+        Internal.Util.Tween(scaleTarget, { Scale = 1 }, 0.2)
+    end)
+end
+
+Internal.Util.Round = function(value, decimals)
+    local factor = 10 ^ (decimals or 0)
+    return math.floor(value * factor + 0.5) / factor
+end
+
+Internal.Util.KeyName = function(keyCode)
+    if typeof(keyCode) == "EnumItem" then
+        return (tostring(keyCode):gsub("Enum.KeyCode.", ""):gsub("Enum.UserInputType.", ""))
+    end
+    return "None"
+end
+
+Internal.Util.ToKeyCode = function(value)
+    if typeof(value) == "EnumItem" then
+        return value
+    end
+    if type(value) ~= "string" then
+        return nil
+    end
+    local ok, result = pcall(function()
+        return Enum.KeyCode[value]
+    end)
+    return ok and result or nil
+end
+
+Internal.Theme.Bind = function(instance, property, key)
+    table.insert(Internal.State.ThemeBindings, { instance = instance, property = property, key = key })
+    instance[property] = palette[key]
+    return instance
+end
+
+Internal.Theme.BindDynamic = function(instance, property, resolver)
+    table.insert(Internal.State.ThemeBindings, { instance = instance, property = property, resolve = resolver })
+    instance[property] = resolver()
+    return instance
+end
+
+Internal.Theme.Set = function(overrides)
+    overrides = overrides or {}
+    for k, v in pairs(overrides) do
+        if palette[k] ~= nil and typeof(v) == "Color3" then
+            palette[k] = v
+        end
+    end
+    for i = #Internal.State.ThemeBindings, 1, -1 do
+        local binding = Internal.State.ThemeBindings[i]
+        if not pcall(function()
+            binding.instance[binding.property] = binding.resolve and binding.resolve() or palette[binding.key]
+        end) then
+            table.remove(Internal.State.ThemeBindings, i)
+        end
+    end
+end
+
+Internal.Theme.SetAccent = function(color)
+    Internal.Theme.Set({ Accent = color, AccentSoft = color:Lerp(Color3.new(1, 1, 1), 0.28) })
+end
+
+Internal.Theme.Reset = function()
+    Internal.Theme.Set(Internal.Theme.Defaults)
+end
+
+Internal.Icons.Resolve = function(name)
+    if type(name) ~= "string" or name == "" then
+        return ""
+    end
+    if name:match("^rbxassetid://") or name:match("^rbxasset://") then
+        return name
+    end
+    if name:match("^%d+$") then
+        return "rbxassetid://" .. name
+    end
+    return Internal.Icons.Data[name] or ""
+end
+
+Internal.Config.Path = function()
+    return Internal.Config.Folder .. "/" .. Internal.Config.Name .. ".json"
+end
+
+Internal.Config.Setup = function(folder, name)
+    if not Env.Filesystem then
+        return
+    end
+    Internal.Config.Folder = folder or "Zenthra"
+    Internal.Config.Name = name or "config"
+    Internal.Config.Enabled = true
+    if not isfolder(Internal.Config.Folder) then
+        pcall(makefolder, Internal.Config.Folder)
+    end
+    ZenthraUI.MediaFolder = Internal.Config.Folder .. "/backgrounds"
+    pcall(function()
+        if not isfolder(ZenthraUI.MediaFolder) then
+            makefolder(ZenthraUI.MediaFolder)
+        end
+    end)
+end
+
+Internal.Config.EncodeValue = function(value)
+    if typeof(value) == "Color3" then
+        return { __t = "Color3", r = math.floor(value.R * 255 + 0.5), g = math.floor(value.G * 255 + 0.5), b = math.floor(value.B * 255 + 0.5) }
+    end
+    if typeof(value) == "Enum" or typeof(value) == "EnumItem" then
+        return { __t = "Enum", v = tostring(value) }
+    end
+    return value
+end
+
+Internal.Config.DecodeValue = function(value)
+    if type(value) == "table" and value.__t == "Color3" then
+        return Color3.fromRGB(value.r, value.g, value.b)
+    end
+    if type(value) == "table" and value.__t == "Enum" then
+        local enumType, enumVal = value.v:match("^Enum%.(%w+)%.(%w+)$")
+        if enumType and Enum[enumType] then
+            local ok, result = pcall(function()
+                return Enum[enumType][enumVal]
+            end)
+            if ok then
+                return result
+            end
+        end
+        return nil
+    end
+    return value
+end
+
+Internal.Config.Save = function()
+    if not Internal.Config.Enabled then
+        return
+    end
+    local data = {}
+    for k, v in pairs(ZenthraUI.Flags) do
+        data[k] = Internal.Config.EncodeValue(v)
+    end
+    pcall(function()
+        writefile(Internal.Config.Path(), Http:JSONEncode(data))
+    end)
+end
+
+Internal.Config.Queue = function()
+    if not Internal.Config.Enabled or Internal.Config._queued then
+        return
+    end
+    Internal.Config._queued = true
+    task.delay(0.4, function()
+        Internal.Config._queued = false
+        Internal.Config.Save()
+    end)
+end
+
+Internal.Config.Load = function()
+    if not Internal.Config.Enabled or not isfile(Internal.Config.Path()) then
+        return {}
+    end
+    local ok, result = pcall(function()
+        return Http:JSONDecode(readfile(Internal.Config.Path()))
+    end)
+    if not ok or type(result) ~= "table" then
+        return {}
+    end
+    local data = {}
+    for k, v in pairs(result) do
+        data[k] = Internal.Config.DecodeValue(v)
+    end
+    return data
+end
+
+Internal.Config.SetFlag = function(flag, value)
+    if not flag then
+        return
+    end
+    ZenthraUI.Flags[flag] = value
+    Internal.Config.Queue()
+end
+
+Env.RandomName = function()
+    local chars = {}
+    for i = 1, math.random(9, 15) do
+        local n = math.random(1, 52)
+        chars[i] = ("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ"):sub(n, n)
+    end
+    return table.concat(chars)
+end
+
+Env.Registry = function()
+    local reg = getgenv and getgenv().__ZenthraGuis
+    if type(reg) ~= "table" then
+        reg = {}
+        if getgenv then
+            getgenv().__ZenthraGuis = reg
+        end
+    end
+    return reg
+end
+
+Env.Adopt = function(gui)
+    local protect = rawget(getgenv(), "protectgui")
+    if typeof(protect) ~= "function" then
+        local syn = rawget(getgenv(), "syn")
+        protect = type(syn) == "table" and syn.protect_gui or nil
+    end
+    if typeof(protect) == "function" then
+        pcall(protect, gui)
+    end
+    table.insert(Env.Registry(), gui)
+    return gui
+end
+
+Env.SafeParent = function()
+    local playerGui = LocalPlayer and (LocalPlayer:FindFirstChild("PlayerGui") or LocalPlayer:WaitForChild("PlayerGui", 8))
+    if typeof(gethui) == "function" then
+        local ok, result = pcall(gethui)
+        if ok and typeof(result) == "Instance" then
+            local isPlayerGui = result == playerGui
+            if not isPlayerGui and playerGui then
+                local ok2, isDescendant = pcall(function()
+                    return result:IsDescendantOf(playerGui)
+                end)
+                isPlayerGui = ok2 and isDescendant
+            end
+            if not isPlayerGui then
+                if pcall(function() result:GetChildren() end) then
+                    return result
+                end
+            end
+        end
+    end
+    if pcall(function() return CoreGui.Name end) then
+        return CoreGui
+    end
+    return playerGui or CoreGui
+end
+
+Env.PlayerGuiParent = function()
+    if not LocalPlayer then
+        return nil
+    end
+    return LocalPlayer:FindFirstChild("PlayerGui")
+end
+
+Env.GuiParent = function()
+    local ok, result = pcall(function()
+        return CoreGui
+    end)
+    if ok and typeof(result) == "Instance" then
+        return result
+    end
+    return Env.PlayerGuiParent()
+end
+
+Env.GuiDisplayOrder = 2147483646
+Env.NotifyDisplayOrder = 2147483647
+
+Env.PromoteGui = function(gui, displayOrder)
+    if typeof(gui) ~= "Instance" then
+        return
+    end
+    local ok, isScreenGui = pcall(function()
+        return gui:IsA("ScreenGui")
+    end)
+    if not ok or not isScreenGui then
+        return
+    end
+    displayOrder = displayOrder or Env.GuiDisplayOrder
+    pcall(function()
+        gui.IgnoreGuiInset = true
+        gui.ResetOnSpawn = false
+        gui.AutoLocalize = false
+        gui.DisplayOrder = displayOrder
+        gui.Enabled = true
+    end)
+    pcall(function()
+        gui.ClipToDeviceSafeArea = false
+    end)
+    pcall(function()
+        gui.SafeAreaCompatibility = Enum.SafeAreaCompatibility.None
+    end)
+    pcall(function()
+        gui.ScreenInsets = Enum.ScreenInsets.None
+    end)
+    pcall(function()
+        gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+    end)
+    local parent = Env.GuiParent()
+    local fallback = Env.PlayerGuiParent()
+    if parent and gui.Parent ~= parent then
+        if not pcall(function() gui.Parent = parent end) or gui.Parent ~= parent then
+            if fallback and gui.Parent ~= fallback then
+                pcall(function() gui.Parent = fallback end)
+            end
+        end
+    end
+end
+
+Internal.Util.HookRegistry = function()
+    local hooks = getgenv and getgenv().__ZenthraHooks
+    if type(hooks) ~= "table" then
+        hooks = {}
+        if getgenv then
+            getgenv().__ZenthraHooks = hooks
+        end
+    end
+    return hooks
+end
+
+Internal.Util.HookMethod = function(target, key, hookFn)
+    if type(target) ~= "table" or type(hookFn) ~= "function" then
+        return nil
+    end
+    local registry = Internal.Util.HookRegistry()
+    local existing = nil
+    for _, h in ipairs(registry) do
+        if h.target == target and h.key == key then
+            existing = h
+            break
+        end
+    end
+    if existing then
+        if existing.undo then
+            pcall(existing.undo)
+            existing.undo = nil
+        end
+        if type(existing.original) == "function" then
+            target[key] = existing.original
+        end
+    end
+    local original = target[key]
+    if type(original) ~= "function" then
+        return nil
+    end
+    local wrapped = function(...)
+        return original(...)
+    end
+    local hooked = hookFn(wrapped)
+    if type(hooked) ~= "function" then
+        return nil
+    end
+    local replacement = function(...)
+        return hooked(...)
+    end
+
+    local entry = existing or { target = target, key = key }
+    entry.original = original
+    entry.undo = nil
+
+    if typeof(hookfunction) == "function" then
+        local ok, result = pcall(hookfunction, original, replacement)
+        if ok and type(result) == "function" then
+            wrapped = result
+            entry.undo = function()
+                pcall(hookfunction, original, result)
+            end
+            if not existing then
+                registry[#registry + 1] = entry
+            end
+            return wrapped
+        end
+    end
+
+    target[key] = replacement
+    entry.undo = function()
+        target[key] = original
+    end
+    if not existing then
+        registry[#registry + 1] = entry
+    end
+    return wrapped
+end
+
+Internal.Notify.Profile = function()
+    return Internal.Notify.Profiles[Internal.Notify.Position] or Internal.Notify.Profiles["Right Bottom"]
+end
+
+Internal.Notify.BaseOffset = function(profile)
+    if profile.sign > 0 then
+        return Internal.Notify.Edge + Internal.Services.Gui:GetGuiInset().Y
+    end
+    return Internal.Notify.Edge
+end
+
+Internal.Notify.Restack = function(animated)
+    local profile = Internal.Notify.Profile()
+    local offset = Internal.Notify.BaseOffset(profile)
+    for _, card in ipairs(Internal.Notify.Active) do
+        if not card.Dismissing and card.Card.Parent then
+            card.Card.AnchorPoint = Vector2.new(profile.ax, profile.ay)
+            local pos = UDim2.new(profile.xs, profile.shown, profile.ys, profile.sign * offset)
+            if animated == false then
+                card.Card.Position = pos
+            else
+                Internal.Util.Tween(card.Card, { Position = pos }, 0.34)
+            end
+            offset = offset + card.Height + Internal.Notify.Gap
+        end
+    end
+end
+
+Internal.Notify.SetPosition = function(position)
+    if not Internal.Notify.Profiles[position] then
+        return false
+    end
+    Internal.Notify.Position = position
+    Internal.Notify.Restack(true)
+    return true
+end
+
+Internal.Notify.GetPosition = function()
+    return Internal.Notify.Position
+end
+
+Internal.Notify.Push = function(arg, arg2)
+    local data
+    if type(arg) == "string" then
+        data = { Title = arg, Text = arg2 }
+    else
+        data = arg
+    end
+    data = data or {}
+    local kind = Internal.Notify.Kinds[tostring(data.Type or "info"):lower()] or Internal.Notify.Kinds.info
+    local duration = data.Duration or 4
+    local profile = Internal.Notify.Profile()
+    local title = data.Title or data.Header or "Zenthra"
+    local text = data.Text or data.Content or data.Description or data.Message
+
+    if text ~= nil then
+        text = tostring(text)
+        if text == "" then
+            text = nil
+        end
+    end
+
+    local cardProps = {
+        Name = "Notification",
+        AnchorPoint = Vector2.new(profile.ax, profile.ay),
+        Size = UDim2.fromOffset(Internal.Notify.Width, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        GroupTransparency = 1,
+        BackgroundTransparency = 0.02,
+        BorderSizePixel = 0,
+    }
+    local cardChildren = {
+        Internal.Util.Corner(10),
+        Internal.Util.Stroke("Border", 1, 0.2),
+        Internal.Util.Padding(12, 12, 12, 12),
+    }
+    local card = Internal.Util.New("CanvasGroup", cardProps, cardChildren)
+    Internal.Theme.Bind(card, "BackgroundColor3", "Surface")
+    card.Parent = Internal.Env.NotifyGui and Internal.Env.NotifyGui:FindFirstChild("Container") or Internal.Env.PlayerGuiParent()
+
+    local iconFrame = Internal.Util.New("Frame", {
+        Size = UDim2.fromOffset(26, 26),
+        BackgroundTransparency = 0.86,
+        BorderSizePixel = 0,
+        Parent = card,
+    }, { Internal.Util.Corner(8) })
+    Internal.Theme.Bind(iconFrame, "BackgroundColor3", kind.key)
+
+    Internal.Util.Image({
+        Image = data.Icon or kind.glyph,
+        Size = UDim2.fromOffset(14, 14),
+        Position = UDim2.fromScale(0.5, 0.5),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        ColorKey = kind.key,
+        Parent = iconFrame,
+    })
+
+    local textFrame = Internal.Util.New("Frame", {
+        Position = UDim2.fromOffset(36, 0),
+        Size = UDim2.new(1, -36, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        Parent = card,
+    }, { Internal.Util.List(3) })
+
+    Internal.Util.Label({
+        Text = tostring(title),
+        TextSize = 13,
+        Weight = Internal.Layout.Weight.Bold,
+        Size = UDim2.new(1, 0, 0, 15),
+        Parent = textFrame,
+    })
+
+    if text then
+        Internal.Util.Label({
+            Text = text,
+            TextSize = 12,
+            ColorKey = "SubText",
+            TextWrapped = true,
+            RichText = data.RichText == true,
+            AutomaticSize = Enum.AutomaticSize.Y,
+            Size = UDim2.new(1, 0, 0, 0),
+            Parent = textFrame,
+        })
+    end
+
+    local barFrame = Internal.Util.New("Frame", {
+        Size = UDim2.new(1, 0, 0, 11),
+        BackgroundTransparency = 1,
+        LayoutOrder = 9,
+        Parent = textFrame,
+    })
+
+    local barBg = Internal.Util.New("Frame", {
+        AnchorPoint = Vector2.new(0, 1),
+        Position = UDim2.new(0, 0, 1, 0),
+        Size = UDim2.new(1, 0, 0, 3),
+        BackgroundTransparency = 0.86,
+        BorderSizePixel = 0,
+        Parent = barFrame,
+    }, { Internal.Util.Corner(2) })
+    Internal.Theme.Bind(barBg, "BackgroundColor3", "SurfaceAlt")
+
+    local barFill = Internal.Util.New("Frame", {
+        Size = UDim2.new(1, 0, 1, 0),
+        BorderSizePixel = 0,
+        Parent = barBg,
+    }, { Internal.Util.Corner(2) })
+    Internal.Theme.Bind(barFill, "BackgroundColor3", kind.key)
+
+    local entry = { Card = card, Height = 64, Dismissing = false }
+    table.insert(Internal.Notify.Active, 1, entry)
+
+    local function updateHeight()
+        local scale = 1
+        local uiScale = card:FindFirstChildOfClass("UIScale")
+        if uiScale then
+            scale = uiScale.Scale
+        end
+        return card.AbsoluteSize.Y / math.max(scale, 0.01)
+    end
+
+    entry.Resize = card:GetPropertyChangedSignal("AbsoluteSize"):Connect(function()
+        local h = updateHeight()
+        local changed = h > 0
+        if changed then
+            changed = math.abs(h - entry.Height) > 0.5
+        end
+        if changed then
+            entry.Height = h
+            if not entry.Dismissing then
+                Internal.Notify.Restack(true)
+            end
+        end
+    end)
+
+    card.Position = UDim2.new(profile.xs, profile.hidden, profile.ys, profile.sign * Internal.Notify.BaseOffset(profile))
+
+    task.defer(function()
+        if not card.Parent then
+            return
+        end
+        entry.Height = math.max(updateHeight(), 1)
+        Internal.Notify.Restack(true)
+        Internal.Util.Tween(card, { GroupTransparency = 0 }, 0.3)
+        Internal.Util.Tween(barFill, { Size = UDim2.new(0, 0, 1, 0) }, duration, Enum.EasingStyle.Linear)
+    end)
+
+    local function dismiss()
+        if entry.Dismissing or not card.Parent then
+            return
+        end
+        entry.Dismissing = true
+
+        if entry.Resize then
+            entry.Resize:Disconnect()
+            entry.Resize = nil
+        end
+
+        for i, v in ipairs(Internal.Notify.Active) do
+            if v == entry then
+                table.remove(Internal.Notify.Active, i)
+                break
+            end
+        end
+
+        Internal.Notify.Restack(true)
+        local prof = Internal.Notify.Profile()
+        Internal.Util.Tween(card, { Position = UDim2.new(prof.xs, prof.hidden, card.Position.Y.Scale, card.Position.Y.Offset) }, 0.28, Internal.Layout.Ease, Internal.Layout.EaseIn)
+        Internal.Util.Tween(card, { GroupTransparency = 1 }, 0.24, Enum.EasingStyle.Quad, Internal.Layout.EaseIn)
+
+        task.delay(0.3, function()
+            card:Destroy()
+        end)
+    end
+
+    entry.Dismiss = dismiss
+    task.delay(duration, dismiss)
+    return entry
+end
+
+Internal.Notify.Kinds = {
+    info = { key = "Accent", glyph = "rbxassetid://6035047391" },
+    success = { key = "Success", glyph = "rbxassetid://6035047391" },
+    error = { key = "Danger", glyph = "rbxassetid://6035047391" },
+    warning = { key = "Warning", glyph = "rbxassetid://6035047391" },
+}
+
+Internal.Notify.Profiles = {
+    ["Right Bottom"] = {
+        ax = 1, ay = 1, xs = 1, ys = 1,
+        shown = -Internal.Notify.Edge, hidden = Internal.Notify.Width + Internal.Notify.Edge, sign = -1,
+    },
+    ["Right Top"] = {
+        ax = 1, ay = 0, xs = 1, ys = 0,
+        shown = -Internal.Notify.Edge, hidden = Internal.Notify.Width + Internal.Notify.Edge, sign = 1,
+    },
+    ["Left Bottom"] = {
+        ax = 0, ay = 1, xs = 0, ys = 1,
+        shown = Internal.Notify.Edge, hidden = -(Internal.Notify.Width + Internal.Notify.Edge), sign = -1,
+    },
+    ["Left Top"] = {
+        ax = 0, ay = 0, xs = 0, ys = 0,
+        shown = Internal.Notify.Edge, hidden = -(Internal.Notify.Width + Internal.Notify.Edge), sign = 1,
+    },
+}
+
+Internal.Binds.Changed = function()
+    for _, cb in ipairs(Internal.State.BindsChanged) do
+        pcall(cb)
+    end
+end
+
+Internal.Binds.OnChanged = function(callback)
+    table.insert(Internal.State.BindsChanged or {}, callback)
+end
+
+Internal.State.BindsChanged = {}
+Internal.Binds.OnChanged = function(callback)
+    table.insert(Internal.State.BindsChanged, callback)
+end
+
+Internal.Binds.AttachKeybind = function(config)
+    if Env.Mobile or not config.Flag then
+        return nil
+    end
+    local flagKey = config.Flag .. "__key"
+    local keyCode = Internal.Util.ToKeyCode(Internal.State.Saved[flagKey])
+    local chip = Internal.Util.New("TextButton", {
+        Name = "Keybind",
+        Text = "",
+        AutoButtonColor = false,
+        AnchorPoint = config.AnchorPoint or Vector2.new(0, 0.5),
+        Position = config.Position or UDim2.new(),
+        LayoutOrder = config.LayoutOrder or 0,
+        Size = UDim2.fromOffset(0, Internal.Layout.ChipH),
+        AutomaticSize = Enum.AutomaticSize.X,
+        BackgroundTransparency = 0.4,
+        BorderSizePixel = 0,
+        Parent = config.Parent,
+    }, {
+        Internal.Util.Corner(5),
+        Internal.Util.Padding(0, 0, 6, 6),
+        Internal.Util.New("UISizeConstraint", { MaxSize = Vector2.new(config.MaxWidth or 50, Internal.Layout.ChipH) }),
+    })
+    Internal.Theme.Bind(chip, "BackgroundColor3", "SurfaceAlt")
+    local stroke = Internal.Util.Stroke("Border", 1, 0.25)
+    stroke.Parent = chip
+
+    local label = Internal.Util.Label({
+        Text = "-",
+        TextSize = 10,
+        Weight = Internal.Layout.Weight.SemiBold,
+        ColorKey = "SubText",
+        TextXAlignment = Enum.TextXAlignment.Center,
+        AutomaticSize = Enum.AutomaticSize.X,
+        Size = UDim2.fromOffset(0, Internal.Layout.ChipH),
+        Parent = chip,
+    })
+
+    local bindEntry = { Flag = config.Flag, Label = config.Label or "Bind", Key = keyCode }
+    table.insert(ZenthraUI.Binds, bindEntry)
+    local listening = false
+
+    local function update()
+        label.Text = listening and "?" or (keyCode and Internal.Util.KeyName(keyCode) or "-")
+        label.TextColor3 = (listening or keyCode) and palette.Text or palette.Muted
+        Internal.Util.Tween(stroke, { Color = listening and palette.Accent or palette.Border, Transparency = listening and 0.3 or 0.25 }, 0.18)
+        bindEntry.Key = keyCode
+        Internal.Binds.Changed()
+    end
+    update()
+
+    local function startListening()
+        if Internal.Binds.Binding then
+            return
+        end
+        Internal.Binds.Binding = true
+        listening = true
+        update()
+        local conn
+        conn = Internal.Util.Connect(UserInput.InputBegan, function(input)
+            if input.UserInputType ~= Enum.UserInputType.Keyboard then
+                return
+            end
+            if input.KeyCode == Enum.KeyCode.Unknown then
+                return
+            end
+            conn:Disconnect()
+            listening = false
+            keyCode = not (input.KeyCode == Enum.KeyCode.Backspace or input.KeyCode == Enum.KeyCode.Escape) and input.KeyCode or nil
+            Internal.Config.SetFlag(flagKey, keyCode)
+            update()
+            task.defer(function()
+                Internal.Binds.Binding = false
+            end)
+        end)
+    end
+
+    Internal.Util.Connect(chip.InputBegan, function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.MouseButton2 then
+            startListening()
+        end
+    end)
+
+    if config.Host then
+        Internal.Util.Connect(config.Host.InputBegan, function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton2 then
+                startListening()
+            end
+        end)
+    end
+
+    Internal.Util.Connect(UserInput.InputBegan, function(input, gameProcessed)
+        if gameProcessed or Internal.Binds.Binding or not keyCode then
+            return
+        end
+        if input.KeyCode == keyCode and config.OnPress then
+            task.spawn(config.OnPress)
+        end
+    end)
+
+    Internal.Util.Hover(chip, function()
+        Internal.Util.Tween(chip, { BackgroundTransparency = 0.1 }, 0.16)
+    end, function()
+        Internal.Util.Tween(chip, { BackgroundTransparency = 0.4 }, 0.2)
+    end)
+
+    return {
+        Chip = chip,
+        Get = function()
+            return keyCode
+        end,
+    }
+end
+
+Internal.Binds.AttachBell = function(config)
+    local flagKey = config.Flag .. "__notify"
+    local enabled = Internal.State.Saved[flagKey] == true
+    local size = config.Size or 13
+
+    local bell = Internal.Util.New("ImageLabel", {
+        Name = "Bell",
+        Image = Internal.Icons.Resolve("bell"),
+        ScaleType = Enum.ScaleType.Fit,
+        AnchorPoint = config.AnchorPoint or Vector2.new(0, 0.5),
+        Position = config.Position or UDim2.new(),
+        LayoutOrder = config.LayoutOrder or 0,
+        Size = UDim2.fromOffset(size, size),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Parent = config.Parent,
+    })
+
+    Internal.Theme.BindDynamic(bell, "ImageColor3", function()
+        return enabled and palette.Accent or palette.SubText
+    end)
+
+    bell.ImageTransparency = enabled and 0.05 or 0.5
+
+    Internal.Util.Connect(bell.MouseButton1Click, function()
+        enabled = not enabled
+        Internal.Config.SetFlag(flagKey, enabled)
+        Internal.Util.Tween(bell, { ImageColor3 = enabled and palette.Accent or palette.SubText, ImageTransparency = enabled and 0.05 or 0.5 }, 0.26)
+    end)
+
+    return {
+        Bell = bell,
+        IsOn = function()
+            return enabled
+        end,
+        Announce = function(title, state)
+            if not enabled then
+                return
+            end
+            local isBool = type(state) == "boolean"
+            ZenthraUI:Notify({
+                Title = title,
+                Text = isBool and (state and "Enabled" or "Disabled") or tostring(state),
+                Type = isBool and state and "success" or "info",
+                Duration = 2.5,
+            })
+        end,
+    }
+end
+
+Internal.Components.OptionRoot = function(parent, height, order)
+    return Internal.Util.New("Frame", {
+        Name = "Option",
+        Size = UDim2.new(1, 0, 0, height),
+        BackgroundTransparency = 1,
+        LayoutOrder = order,
+        Parent = parent,
+    })
+end
+
+Internal.Components.Toggle = function(parent, config, order)
+    local value = config.Default == true
+    if Internal.State.Saved[config.Flag] ~= nil then
+        value = Internal.State.Saved[config.Flag] == true
+    end
+
+    local root = Internal.Components.OptionRoot(parent, Internal.Layout.Row, order)
+    local button = Internal.Util.New("TextButton", {
+        Text = "",
+        AutoButtonColor = false,
+        BackgroundTransparency = 1,
+        Size = UDim2.fromScale(1, 1),
+        Parent = root,
+    }, { Internal.Util.FlexRow(7) })
+
+    local label = Internal.Util.Label({
+        Text = config.Title or "Toggle",
+        TextSize = 12,
+        ColorKey = "SubText",
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        Size = UDim2.new(0, 0, 1, 0),
+        LayoutOrder = 1,
+        Parent = button,
+    }, { Internal.Util.Grow() })
+
+    local entry = { Type = "Toggle", Value = value, Root = root }
+
+    local bell
+    if config.Notify and config.Flag then
+        bell = Internal.Binds.AttachBell({ Parent = button, LayoutOrder = 3, Flag = config.Flag })
+    end
+
+    local toggleFrame = Internal.Util.New("Frame", {
+        Size = UDim2.fromOffset(30, 16),
+        BackgroundTransparency = 0.5,
+        BorderSizePixel = 0,
+        LayoutOrder = 4,
+        Parent = button,
+    }, { Internal.Util.Corner(UDim.new(1, 0)), Internal.Util.Stroke("Border", 1, 0.2) })
+    Internal.Theme.Bind(toggleFrame, "BackgroundColor3", "SurfaceAlt")
+
+    local knob = Internal.Util.New("Frame", {
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, 3, 0.5, 0),
+        Size = UDim2.fromOffset(10, 10),
+        BorderSizePixel = 0,
+        Parent = toggleFrame,
+    }, { Internal.Util.Corner(UDim.new(1, 0)) })
+    Internal.Theme.Bind(knob, "BackgroundColor3", "Muted")
+
+    entry.Set = function(_, newValue, silent)
+        local v = newValue == true
+        entry.Value = v
+        Internal.Config.SetFlag(config.Flag, v)
+
+        Internal.Util.Tween(toggleFrame, {
+            BackgroundColor3 = v and palette.Accent or palette.SurfaceAlt,
+            BackgroundTransparency = v and 0.05 or 0.5,
+        }, 0.2)
+
+        Internal.Util.Tween(knob, {
+            Position = v and UDim2.new(1, -13, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+            BackgroundColor3 = v and palette.Background or palette.Muted,
+        }, 0.3)
+
+        Internal.Util.Tween(label, { TextColor3 = v and palette.Text or palette.SubText }, 0.24)
+
+        if not silent then
+            if config.Callback then
+                task.spawn(config.Callback, v)
+            end
+            if bell then
+                bell.Announce(config.Title or "Toggle", v)
+            end
+        end
+    end
+
+    entry.Get = function()
+        return entry.Value
+    end
+
+    Internal.Util.Connect(button.MouseButton1Click, function()
+        entry:Set(not entry.Value)
+    end)
+
+    Internal.Util.Hover(button, function()
+        if not entry.Value then
+            Internal.Util.Tween(label, { TextColor3 = palette.Text }, 0.16)
+        end
+    end, function()
+        if not entry.Value then
+            Internal.Util.Tween(label, { TextColor3 = palette.SubText }, 0.2)
+        end
+    end)
+
+    if config.Keybind ~= false and config.Flag then
+        Internal.Binds.AttachKeybind({
+            Parent = button,
+            Host = button,
+            LayoutOrder = 2,
+            Flag = config.Flag,
+            Label = config.Title or "Toggle",
+            MaxWidth = 54,
+            OnPress = function()
+                entry:Set(not entry.Value)
+            end,
+        })
+    end
+
+    entry:Set(value, true)
+    if value and config.Callback then
+        task.spawn(config.Callback, value)
+    end
+
+    return entry
+end
+
+Internal.Components.Slider = function(parent, config, order)
+    local min = config.Min or 0
+    local max = config.Max or 100
+    local decimals = config.Decimals or 0
+    local suffix = config.Suffix or ""
+    local default = config.Default or min
+
+    if type(Internal.State.Saved[config.Flag]) == "number" then
+        default = Internal.State.Saved[config.Flag]
+    end
+
+    local value = math.clamp(Internal.Util.Round(default, decimals), min, max)
+    local root = Internal.Components.OptionRoot(parent, Env.Mobile and 38 or 32, order)
+
+    local label = Internal.Util.Label({
+        Text = config.Title or "Slider",
+        TextSize = 12,
+        ColorKey = "SubText",
+        Size = UDim2.new(1, -60, 0, 14),
+        Parent = root,
+    })
+
+    local valueLabel = Internal.Util.Label({
+        Text = tostring(value) .. suffix,
+        TextSize = 11,
+        ColorKey = "Text",
+        TextXAlignment = Enum.TextXAlignment.Right,
+        AnchorPoint = Vector2.new(0, 0),
+        Position = UDim2.new(0, 0, 0, 0),
+        Size = UDim2.fromOffset(60, 14),
+        Parent = root,
+    })
+
+    local track = Internal.Util.New("Frame", {
+        AnchorPoint = Vector2.new(0, 1),
+        Position = UDim2.new(0, 0, 1, -2),
+        Size = UDim2.new(1, 0, 0, 5),
+        BackgroundTransparency = 0.35,
+        BorderSizePixel = 0,
+        Parent = root,
+    }, { Internal.Util.Corner(UDim.new(1, 0)), Internal.Util.Stroke("BorderSoft", 1, 0.25) })
+    Internal.Theme.Bind(track, "BackgroundColor3", "SurfaceAlt")
+
+    local fill = Internal.Util.New("Frame", {
+        Size = UDim2.fromScale(0, 1),
+        BorderSizePixel = 0,
+        Parent = track,
+    }, {
+        Internal.Util.Corner(UDim.new(1, 0)),
+        Internal.Util.Gradient(function()
+            return ColorSequence.new({
+                ColorSequenceKeypoint.new(0, palette.AccentDim),
+                ColorSequenceKeypoint.new(0.5, palette.AccentSoft),
+                ColorSequenceKeypoint.new(1, palette.Accent),
+            })
+        end),
+    })
+    Internal.Theme.Bind(fill, "BackgroundColor3", "Accent")
+
+    local knob = Internal.Util.New("Frame", {
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.new(1, 0, 0.5, 0),
+        Size = UDim2.fromOffset(12, 9),
+        BorderSizePixel = 0,
+        ZIndex = 2,
+        Parent = fill,
+    }, { Internal.Util.Corner(UDim.new(1, 0)) })
+    Internal.Theme.Bind(knob, "BackgroundColor3", "AccentSoft")
+
+    local hitbox = Internal.Util.New("TextButton", {
+        Text = "",
+        AutoButtonColor = false,
+        BackgroundTransparency = 1,
+        AnchorPoint = Vector2.new(0, 1),
+        Position = UDim2.new(0, 0, 1, 0),
+        Size = UDim2.new(1, 0, 0, Env.Mobile and 22 or 16),
+        Parent = root,
+    })
+
+    local entry = {
+        Type = "Slider",
+        Value = value,
+        Root = root,
+        Set = function(_, newVal, silent, instant)
+            local v = math.clamp(Internal.Util.Round(tonumber(newVal) or min, decimals), min, max)
+            entry.Value = v
+            Internal.Config.SetFlag(config.Flag, v)
+            local pct = max > min and (v - min) / (max - min) or 0
+            valueLabel.Text = tostring(v) .. suffix
+            if instant then
+                fill.Size = UDim2.fromScale(pct, 1)
+            else
+                Internal.Util.Tween(fill, { Size = UDim2.fromScale(pct, 1) }, 0.16)
+            end
+            if not silent and config.Callback then
+                task.spawn(config.Callback, v)
+            end
+        end,
+        Get = function()
+            return entry.Value
+        end,
+    }
+
+    local dragging = false
+    local function updateFromInput(pos)
+        local trackSize = track.AbsoluteSize.X
+        if trackSize < 1 then
+            return
+        end
+        entry:Set(min + (max - min) * math.clamp((pos.X - track.AbsolutePosition.X) / trackSize, 0, 1), false, true)
+    end
+
+    Internal.Util.Connect(hitbox.InputBegan, function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        dragging = true
+        Internal.Window.BlockDrag = true
+        Internal.Util.Tween(knob, { Size = UDim2.fromOffset(14, 12) }, 0.09)
+        updateFromInput(input.Position)
+    end)
+
+    Internal.Util.Connect(UserInput.InputChanged, function(input)
+        if not dragging then
+            return
+        end
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            updateFromInput(input.Position)
+        end
+    end)
+
+    Internal.Util.Connect(UserInput.InputEnded, function(input)
+        if not dragging then
+            return
+        end
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        dragging = false
+        Internal.Window.BlockDrag = false
+        Internal.Util.Tween(knob, { Size = UDim2.fromOffset(12, 9) }, 0.2)
+        Internal.Config.Queue()
+    end)
+
+    Internal.Util.Hover(hitbox, function()
+        Internal.Util.Tween(label, { TextColor3 = palette.Text }, 0.16)
+    end, function()
+        if not dragging then
+            Internal.Util.Tween(label, { TextColor3 = palette.SubText }, 0.2)
+        end
+    end)
+
+    entry:Set(value, true, true)
+    if config.Callback then
+        task.spawn(config.Callback, value)
+    end
+    return entry
+end
+
+Internal.Components.Dropdown = function(parent, config, order)
+    local multi = config.Multi == true
+    local options = config.Options or {}
+    local maxVisible = config.MaxVisible or 5
+    local value
+    if multi then
+        value = {}
+        for _, v in ipairs(config.Default or {}) do
+            value[v] = true
+        end
+    else
+        value = config.Default
+    end
+    if Internal.State.Saved[config.Flag] ~= nil then
+        value = Internal.State.Saved[config.Flag]
+    end
+
+    local root = Internal.Util.New("Frame", {
+        Name = "Option",
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        LayoutOrder = order,
+        Parent = parent,
+    }, { Internal.Util.List(5) })
+
+    local header = Internal.Util.New("Frame", {
+        Size = UDim2.new(1, 0, 0, 14),
+        BackgroundTransparency = 1,
+        Parent = root,
+    }, { Internal.Util.FlexRow(6) })
+
+    Internal.Util.Label({
+        Text = config.Title or "Dropdown",
+        TextSize = 12,
+        ColorKey = "SubText",
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        Size = UDim2.new(0, 0, 1, 0),
+        LayoutOrder = 1,
+        Parent = header,
+    }, { Internal.Util.Grow() })
+
+    local bell
+    if config.Notify and config.Flag then
+        bell = Internal.Binds.AttachBell({ Parent = header, LayoutOrder = 2, Flag = config.Flag })
+    end
+
+    local button = Internal.Util.New("TextButton", {
+        Text = "",
+        AutoButtonColor = false,
+        Size = UDim2.new(1, 0, 0, Internal.Layout.FieldH),
+        BackgroundTransparency = 0.35,
+        BorderSizePixel = 0,
+        Parent = root,
+    }, {
+        Internal.Util.Corner(7),
+        Internal.Util.Stroke("Border", 1, 0.25),
+        Internal.Util.Padding(0, 0, 10, 10),
+    })
+    Internal.Theme.Bind(button, "BackgroundColor3", "SurfaceAlt")
+    local uiStroke = button:FindFirstChildOfClass("UIStroke")
+
+    local valueLabel = Internal.Util.Label({
+        Text = "None",
+        TextSize = 12,
+        ColorKey = "Text",
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        Size = UDim2.new(1, -20, 1, 0),
+        Parent = button,
+    })
+
+    local chevron = Internal.Util.Image({
+        Image = "chevronDown",
+        Size = UDim2.fromOffset(12, 12),
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, 0, 0.5, 0),
+        ColorKey = "Muted",
+        Parent = button,
+    })
+
+    local listContainer = Internal.Util.New("Frame", {
+        Size = UDim2.new(1, 0, 0, 0),
+        BackgroundTransparency = 1,
+        ClipsDescendants = true,
+        Parent = root,
+    })
+
+    local scroller = Internal.Util.New("ScrollingFrame", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 0.35,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 2,
+        ScrollBarImageTransparency = 0.4,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        CanvasSize = UDim2.new(),
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        Parent = listContainer,
+    }, {
+        Internal.Util.Corner(7),
+        Internal.Util.Stroke("Border", 1, 0.25),
+        Internal.Util.Padding(4, 4, 4, 4),
+        Internal.Util.List(2),
+    })
+    Internal.Theme.Bind(scroller, "BackgroundColor3", "SurfaceAlt")
+    Internal.Theme.Bind(scroller, "ScrollBarImageColor3", "Muted")
+
+    local optionButtons = {}
+    local expanded = false
+    local entry = {
+        Type = "Dropdown",
+        Value = value,
+        Options = options,
+        Root = root,
+    }
+
+    local function isSelected(opt)
+        if multi then
+            return entry.Value[opt] == true
+        end
+        return entry.Value == opt
+    end
+
+    local function updateDisplay()
+        if multi then
+            local selected = {}
+            for _, opt in ipairs(entry.Options) do
+                if entry.Value[opt] then
+                    table.insert(selected, opt)
+                end
+            end
+            valueLabel.Text = #selected > 0 and table.concat(selected, ", ") or "None"
+            valueLabel.TextColor3 = #selected > 0 and palette.Text or palette.Muted
+        else
+            valueLabel.Text = entry.Value and tostring(entry.Value) or "None"
+            valueLabel.TextColor3 = entry.Value and palette.Text or palette.Muted
+        end
+
+        for opt, elements in pairs(optionButtons) do
+            local selected = isSelected(opt)
+            Internal.Util.Tween(elements.label, { TextColor3 = selected and palette.Text or palette.SubText }, 0.16)
+            Internal.Util.Tween(elements.frame, { BackgroundTransparency = selected and 0.86 or 1 }, 0.16)
+            if elements.tick then
+                Internal.Util.Tween(elements.tick, { ImageTransparency = selected and 0 or 1 }, 0.16)
+            end
+        end
+    end
+
+    local function getHeight()
+        local count = math.min(#entry.Options, maxVisible)
+        if count == 0 then
+            return 0
+        end
+        return count * Internal.Layout.OptionH + (count - 1) * 2 + 8
+    end
+
+    local function toggleList(state)
+        expanded = state
+        Internal.Util.Tween(listContainer, { Size = UDim2.new(1, 0, 0, expanded and getHeight() or 0) }, 0.28)
+        Internal.Util.Tween(chevron, { Rotation = expanded and 180 or 0 }, 0.22)
+        Internal.Util.Tween(uiStroke, { Color = expanded and palette.Accent or palette.Border, Transparency = expanded and 0.4 or 0.25 }, 0.22)
+    end
+
+    local function selectOption(opt)
+        if multi then
+            local newVals = table.clone(entry.Value)
+            newVals[opt] = not newVals[opt] or nil
+            entry:Set(newVals)
+        else
+            entry:Set(opt)
+            toggleList(false)
+        end
+    end
+
+    entry.Set = function(_, newVal, silent)
+        if multi then
+            local cleanVals = {}
+            if type(newVal) == "table" then
+                if #newVal > 0 then
+                    for _, v in ipairs(newVal) do
+                        cleanVals[v] = true
+                    end
+                else
+                    for k, v in pairs(newVal) do
+                        if v then
+                            cleanVals[k] = true
+                        end
+                    end
+                end
+            end
+            entry.Value = cleanVals
+        else
+            entry.Value = newVal
+        end
+        Internal.Config.SetFlag(config.Flag, entry.Value)
+        updateDisplay()
+
+        if not silent then
+            if config.Callback then
+                task.spawn(config.Callback, entry.Value)
+            end
+            if bell then
+                bell.Announce(config.Title or "Dropdown", valueLabel.Text)
+            end
+        end
+    end
+
+    entry.Get = function()
+        return entry.Value
+    end
+
+    entry.SetOptions = function(_, newOptions)
+        entry.Options = newOptions or {}
+        for _, elements in pairs(optionButtons) do
+            elements.frame:Destroy()
+        end
+        optionButtons = {}
+
+        for i, opt in ipairs(entry.Options) do
+            local btn = Internal.Util.New("TextButton", {
+                Text = "",
+                AutoButtonColor = false,
+                Size = UDim2.new(1, 0, 0, Internal.Layout.OptionH),
+                BackgroundTransparency = 1,
+                BorderSizePixel = 0,
+                LayoutOrder = i,
+                Parent = scroller,
+            }, {
+                Internal.Util.Corner(5),
+                Internal.Util.Padding(0, 0, 8, 8),
+                Internal.Util.FlexRow(6),
+            })
+            Internal.Theme.Bind(btn, "BackgroundColor3", "Accent")
+
+            local lbl = Internal.Util.Label({
+                Text = tostring(opt),
+                TextSize = 11.5,
+                ColorKey = "SubText",
+                TextTruncate = Enum.TextTruncate.AtEnd,
+                Size = UDim2.new(0, 0, 1, 0),
+                LayoutOrder = 1,
+                Parent = btn,
+            }, { Internal.Util.Grow() })
+
+            local tickImg = Internal.Util.Image({
+                Image = "check",
+                Size = UDim2.fromOffset(12, 12),
+                ImageTransparency = 1,
+                ColorKey = "Accent",
+                LayoutOrder = 2,
+                Parent = btn,
+            })
+
+            optionButtons[opt] = { frame = btn, label = lbl, tick = tickImg }
+
+            Internal.Util.Connect(btn.MouseButton1Click, function()
+                selectOption(opt)
+            end)
+            Internal.Util.Hover(btn, function()
+                if not isSelected(opt) then
+                    Internal.Util.Tween(btn, { BackgroundTransparency = 0.93 }, 0.16)
+                end
+            end, function()
+                if not isSelected(opt) then
+                    Internal.Util.Tween(btn, { BackgroundTransparency = 1 }, 0.18)
+                end
+            end)
+        end
+
+        if multi then
+            local cleanVals = {}
+            for k, v in pairs(entry.Value or {}) do
+                if v and optionButtons[k] then
+                    cleanVals[k] = true
+                end
+            end
+            entry.Value = cleanVals
+        elseif entry.Value ~= nil and not optionButtons[entry.Value] then
+            entry.Value = nil
+        end
+
+        updateDisplay()
+        if expanded then
+            toggleList(true)
+        end
+    end
+
+    Internal.Util.Connect(button.MouseButton1Click, function()
+        toggleList(not expanded)
+    end)
+
+    Internal.Util.Hover(button, function()
+        if not expanded then
+            Internal.Util.Tween(uiStroke, { Transparency = 0.05 }, 0.16)
+        end
+    end, function()
+        if not expanded then
+            Internal.Util.Tween(uiStroke, { Transparency = 0.25 }, 0.2)
+        end
+    end)
+
+    entry:SetOptions(options)
+    entry:Set(entry.Value, true)
+
+    if config.Callback then
+        task.spawn(config.Callback, entry.Value)
+    end
+
+    return entry
+end
+
+Internal.Components.Keybind = function(parent, config, order)
+    local default = config.Default
+    if Internal.State.Saved[config.Flag] ~= nil then
+        default = Internal.State.Saved[config.Flag]
+    end
+    local keyCode = Internal.Util.ToKeyCode(default)
+    local root = Internal.Components.OptionRoot(parent, Internal.Layout.Row, order)
+
+    Internal.Util.Label({
+        Text = config.Title or "Keybind",
+        TextSize = 12,
+        ColorKey = "SubText",
+        Size = UDim2.new(1, -70, 1, 0),
+        Parent = root,
+    })
+
+    local button = Internal.Util.New("TextButton", {
+        Text = "",
+        AutoButtonColor = false,
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, 0, 0.5, 0),
+        Size = UDim2.fromOffset(60, 20),
+        BackgroundTransparency = 0.4,
+        BorderSizePixel = 0,
+        Parent = root,
+    }, { Internal.Util.Corner(6), Internal.Util.Stroke("Border", 1, 0.25) })
+    Internal.Theme.Bind(button, "BackgroundColor3", "SurfaceAlt")
+
+    local label = Internal.Util.Label({
+        Text = Internal.Util.KeyName(keyCode),
+        TextSize = 11,
+        ColorKey = keyCode and "Text" or "Muted",
+        TextXAlignment = Enum.TextXAlignment.Center,
+        Size = UDim2.fromScale(1, 1),
+        Parent = button,
+    })
+
+    local listening = false
+    local entry = { Type = "Keybind", Value = keyCode, Root = root }
+    local bindEntry = { Flag = config.Flag, Label = config.Title or "Keybind", Key = keyCode }
+    table.insert(ZenthraUI.Binds, bindEntry)
+
+    entry.Set = function(_, newVal, silent)
+        entry.Value = newVal
+        label.Text = Internal.Util.KeyName(newVal)
+        label.TextColor3 = newVal and palette.Text or palette.Muted
+        Internal.Config.SetFlag(config.Flag, newVal)
+        bindEntry.Key = newVal
+        Internal.Binds.Changed()
+        if not silent and config.Changed then
+            task.spawn(config.Changed, newVal)
+        end
+    end
+
+    entry.Get = function()
+        return entry.Value
+    end
+
+    Internal.Util.Connect(button.MouseButton1Click, function()
+        if listening then
+            return
+        end
+        listening = true
+        Internal.Binds.Binding = true
+        label.Text = "..."
+        label.TextColor3 = palette.Accent
+    end)
+
+    Internal.Util.Connect(UserInput.InputBegan, function(input, gameProcessed)
+        if listening then
+            if input.UserInputType == Enum.UserInputType.Keyboard then
+                listening = false
+                Internal.Binds.Binding = false
+                if input.KeyCode == Enum.KeyCode.Escape or input.KeyCode == Enum.KeyCode.Backspace then
+                    entry:Set(nil)
+                else
+                    entry:Set(input.KeyCode)
+                end
+            end
+            return
+        end
+        if gameProcessed or not entry.Value then
+            return
+        end
+        if input.KeyCode == entry.Value and config.Callback then
+            task.spawn(config.Callback)
+        end
+    end)
+
+    Internal.Util.Hover(button, function()
+        if not listening then
+            Internal.Util.Tween(button, { BackgroundTransparency = 0.15 }, 0.16)
+        end
+    end, function()
+        Internal.Util.Tween(button, { BackgroundTransparency = 0.4 }, 0.2)
+    end)
+
+    entry:Set(keyCode, true)
+    return entry
+end
+
+Internal.Components.Input = function(parent, config, order)
+    local default = config.Default or ""
+    if type(Internal.State.Saved[config.Flag]) == "string" then
+        default = Internal.State.Saved[config.Flag]
+    end
+
+    local root = Internal.Util.New("Frame", {
+        Name = "Option",
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        LayoutOrder = order,
+        Parent = parent,
+    }, { Internal.Util.List(5) })
+
+    if config.Title then
+        Internal.Util.Label({
+            Text = config.Title,
+            TextSize = 12,
+            ColorKey = "SubText",
+            Size = UDim2.new(1, 0, 0, 14),
+            Parent = root,
+        })
+    end
+
+    local frame = Internal.Util.New("Frame", {
+        Size = UDim2.new(1, 0, 0, Internal.Layout.FieldH - 2),
+        BackgroundTransparency = 0.35,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        Parent = root,
+    }, {
+        Internal.Util.Corner(7),
+        Internal.Util.Stroke("Border", 1, 0.25),
+        Internal.Util.Padding(0, 0, 10, 10),
+    })
+    Internal.Theme.Bind(frame, "BackgroundColor3", "SurfaceAlt")
+    local uiStroke = frame:FindFirstChildOfClass("UIStroke")
+
+    local box = Internal.Util.New("TextBox", {
+        Text = default,
+        PlaceholderText = config.Placeholder or "",
+        ClearTextOnFocus = false,
+        BackgroundTransparency = 1,
+        ClipsDescendants = true,
+        TextWrapped = false,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        FontFace = Internal.Util.Font(Internal.Layout.Weight.Medium),
+        TextSize = 12,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Size = UDim2.new(1, 0, 1, 0),
+        Parent = frame,
+    })
+    Internal.Theme.Bind(box, "TextColor3", "Text")
+    Internal.Theme.Bind(box, "PlaceholderColor3", "Muted")
+
+    local entry = {
+        Type = "Input",
+        Value = default,
+        Root = root,
+        Set = function(_, newVal, silent)
+            entry.Value = tostring(newVal or "")
+            box.Text = entry.Value
+            Internal.Config.SetFlag(config.Flag, entry.Value)
+            if not silent and config.Callback then
+                task.spawn(config.Callback, entry.Value)
+            end
+        end,
+        Get = function()
+            return entry.Value
+        end,
+    }
+
+    Internal.Util.Connect(box.Focused, function()
+        Internal.Util.Tween(uiStroke, { Color = palette.Accent, Transparency = 0.4 }, 0.09)
+    end)
+
+    Internal.Util.Connect(box.FocusLost, function(enterPressed)
+        Internal.Util.Tween(uiStroke, { Color = palette.Border, Transparency = 0.25 }, 0.2)
+        if config.ClearOnEnter and enterPressed then
+            local text = box.Text
+            entry:Set("", true)
+            if config.Callback then
+                task.spawn(config.Callback, text)
+            end
+        else
+            entry:Set(box.Text)
+        end
+    end)
+
+    entry:Set(default, true)
+    return entry
+end
+
+Internal.Components.Button = function(parent, config, order)
+    local root = Internal.Components.OptionRoot(parent, Internal.Layout.FieldH, order)
+    local button = Internal.Util.New("TextButton", {
+        Text = "",
+        AutoButtonColor = false,
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 0.35,
+        BorderSizePixel = 0,
+        Parent = root,
+    }, {
+        Internal.Util.Corner(7),
+        Internal.Util.Stroke("Border", 1, 0.25),
+        Internal.Util.New("UIScale", { Scale = 1 }),
+    })
+    Internal.Theme.Bind(button, "BackgroundColor3", "SurfaceAlt")
+
+    local label = Internal.Util.Label({
+        Text = config.Title or "Button",
+        TextSize = 12,
+        Weight = Internal.Layout.Weight.SemiBold,
+        ColorKey = "SubText",
+        TextXAlignment = Enum.TextXAlignment.Center,
+        Size = UDim2.fromScale(1, 1),
+        Parent = button,
+    })
+
+    Internal.Util.Hover(button, function()
+        Internal.Util.Tween(button, { BackgroundTransparency = 0.1 }, 0.16)
+        Internal.Util.Tween(label, { TextColor3 = palette.Text }, 0.16)
+    end, function()
+        Internal.Util.Tween(button, { BackgroundTransparency = 0.35 }, 0.2)
+        Internal.Util.Tween(label, { TextColor3 = palette.SubText }, 0.2)
+    end)
+
+    Internal.Util.Press(button, button:FindFirstChildOfClass("UIScale"))
+
+    Internal.Util.Connect(button.MouseButton1Click, function()
+        if config.Callback then
+            task.spawn(config.Callback)
+        end
+    end)
+
+    return {
+        Type = "Button",
+        Root = root,
+        SetTitle = function(_, text)
+            label.Text = text
+        end,
+    }
+end
+
+Internal.Components.Colorpicker = function(parent, config, order)
+    local default = config.Default or Color3.fromRGB(255, 255, 255)
+    if typeof(Internal.State.Saved[config.Flag]) == "Color3" then
+        default = Internal.State.Saved[config.Flag]
+    end
+
+    local h, s, v = default:ToHSV()
+
+    local root = Internal.Util.New("Frame", {
+        Name = "Option",
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        LayoutOrder = order,
+        Parent = parent,
+    }, { Internal.Util.List(6) })
+
+    local header = Internal.Util.New("TextButton", {
+        Text = "",
+        AutoButtonColor = false,
+        Size = UDim2.new(1, 0, 0, Internal.Layout.Row),
+        BackgroundTransparency = 1,
+        Parent = root,
+    })
+
+    local label = Internal.Util.Label({
+        Text = config.Title or "Colorpicker",
+        TextSize = 12,
+        ColorKey = "SubText",
+        Size = UDim2.new(1, -40, 1, 0),
+        Parent = header,
+    })
+
+    local preview = Internal.Util.New("Frame", {
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, 0, 0.5, 0),
+        Size = UDim2.fromOffset(34, 18),
+        BackgroundColor3 = default,
+        BorderSizePixel = 0,
+        Parent = header,
+    }, { Internal.Util.Corner(6), Internal.Util.Stroke("Border", 1, 0.25) })
+
+    local container = Internal.Util.New("Frame", {
+        Size = UDim2.new(1, 0, 0, 0),
+        BackgroundTransparency = 1,
+        ClipsDescendants = true,
+        Parent = root,
+    })
+
+    local pickerArea = Internal.Util.New("Frame", {
+        Size = UDim2.new(1, 0, 0, 144),
+        BackgroundTransparency = 0.4,
+        BorderSizePixel = 0,
+        Parent = container,
+    }, {
+        Internal.Util.Corner(8),
+        Internal.Util.Stroke("Border", 1, 0.25),
+        Internal.Util.Padding(6, 8, 8, 8),
+        Internal.Util.List(7),
+    })
+    Internal.Theme.Bind(pickerArea, "BackgroundColor3", "SurfaceAlt")
+
+    local sv = Internal.Util.New("Frame", {
+        Size = UDim2.new(1, 0, 0, 78),
+        BackgroundColor3 = Color3.fromHSV(h, 1, 1),
+        BorderSizePixel = 0,
+        Parent = pickerArea,
+    }, {
+        Internal.Util.Corner(6),
+        Internal.Util.New("Frame", {
+            Size = UDim2.fromScale(1, 1),
+            BackgroundColor3 = Color3.new(1, 1, 1),
+            BorderSizePixel = 0,
+        }, {
+            Internal.Util.Corner(6),
+            Internal.Util.New("UIGradient", { Color = ColorSequence.new(Color3.new(1, 1, 1)), Transparency = NumberSequence.new(0, 1) }),
+        }),
+        Internal.Util.New("Frame", {
+            Size = UDim2.fromScale(1, 1),
+            BackgroundColor3 = Color3.new(0, 0, 0),
+            BorderSizePixel = 0,
+            ZIndex = 2,
+        }, {
+            Internal.Util.Corner(6),
+            Internal.Util.New("UIGradient", { Rotation = 90, Transparency = NumberSequence.new(1, 0) }),
+        }),
+        Internal.Util.New("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Size = UDim2.fromOffset(6, 6),
+            BackgroundTransparency = 1,
+            ZIndex = 4,
+        }, {
+            Internal.Util.Corner(UDim.new(1, 0)),
+            Internal.Util.New("UIStroke", { Color = Color3.new(0, 0, 1), Thickness = 2 }),
+        }),
+    })
+
+    local hueBar = Internal.Util.New("Frame", {
+        Size = UDim2.new(1, 0, 0, 10),
+        BorderSizePixel = 0,
+        Parent = pickerArea,
+    }, {
+        Internal.Util.Corner(UDim.new(1, 0)),
+        Internal.Util.New("UIGradient", {
+            Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 0, 0)),
+                ColorSequenceKeypoint.new(0.17, Color3.fromRGB(255, 255, 0)),
+                ColorSequenceKeypoint.new(0.33, Color3.fromRGB(0, 255, 0)),
+                ColorSequenceKeypoint.new(0.5, Color3.fromRGB(0, 255, 255)),
+                ColorSequenceKeypoint.new(0.67, Color3.fromRGB(0, 0, 255)),
+                ColorSequenceKeypoint.new(0.83, Color3.fromRGB(255, 0, 255)),
+                ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 0, 0)),
+            }),
+        }),
+        Internal.Util.New("Frame", {
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.new(h, 0, 0.5, 0),
+            Size = UDim2.fromOffset(6, 14),
+            BackgroundColor3 = Color3.new(1, 1, 1),
+            BorderSizePixel = 0,
+            ZIndex = 2,
+        }, { Internal.Util.Corner(3) }),
+    })
+
+    local hexBox = Internal.Util.New("TextBox", {
+        Text = "#FFFFFF",
+        ClearTextOnFocus = false,
+        BackgroundTransparency = 0.5,
+        FontFace = Internal.Util.Font(Internal.Layout.Weight.Medium),
+        TextSize = 11,
+        TextXAlignment = Enum.TextXAlignment.Center,
+        Size = UDim2.new(1, 0, 0, 18),
+        BorderSizePixel = 0,
+        Parent = pickerArea,
+    }, { Internal.Util.Corner(6), Internal.Util.Stroke("BorderSoft", 1, 0.3) })
+    Internal.Theme.Bind(hexBox, "BackgroundColor3", "Surface")
+    Internal.Theme.Bind(hexBox, "TextColor3", "Text")
+
+    local rainbowToggle = Internal.Util.New("TextButton", {
+        Text = "",
+        AutoButtonColor = false,
+        Size = UDim2.new(1, 0, 0, 20),
+        BackgroundTransparency = 1,
+        Parent = pickerArea,
+    })
+
+    local rainbowLabel = Internal.Util.Label({
+        Text = "Rainbow",
+        TextSize = 12,
+        ColorKey = "SubText",
+        Size = UDim2.new(1, -34, 1, 0),
+        Parent = rainbowToggle,
+    })
+
+    local rainbowSwitch = Internal.Util.New("Frame", {
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, 0, 0.5, 0),
+        Size = UDim2.fromOffset(28, 15),
+        BackgroundTransparency = 0.5,
+        BorderSizePixel = 0,
+        Parent = rainbowToggle,
+    }, { Internal.Util.Corner(UDim.new(1, 0)), Internal.Util.Stroke("Border", 1, 0.2) })
+    Internal.Theme.Bind(rainbowSwitch, "BackgroundColor3", "Surface")
+
+    local rainbowKnob = Internal.Util.New("Frame", {
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, 3, 0.5, 0),
+        Size = UDim2.fromOffset(9, 9),
+        BorderSizePixel = 0,
+        Parent = rainbowSwitch,
+    }, { Internal.Util.Corner(UDim.new(1, 0)) })
+    Internal.Theme.Bind(rainbowKnob, "BackgroundColor3", "Muted")
+
+    local expanded = false
+    local isRainbow = false
+    local rainbowConn
+    local entry = { Type = "Colorpicker", Value = default, Root = root }
+
+    local function updateColor(silent)
+        local color = Color3.fromHSV(h, s, v)
+        entry.Value = color
+        preview.BackgroundColor3 = color
+        sv.BackgroundColor3 = Color3.fromHSV(h, 1, 1)
+        local knob = sv:FindFirstChild("Frame", true)
+        if knob then
+            knob.Position = UDim2.new(s, 0, 1 - v, 0)
+        end
+        local hueKnob = hueBar:FindFirstChild("Frame")
+        if hueKnob then
+            hueKnob.Position = UDim2.new(h, 0, 0.5, 0)
+        end
+        hexBox.Text = string.format("#%02X%02X%02X", math.floor(color.R * 255 + 0.5), math.floor(color.G * 255 + 0.5), math.floor(color.B * 255 + 0.5))
+        if config.Flag then
+            ZenthraUI.Flags[config.Flag] = color
+            if not silent then
+                Internal.Config.Queue()
+            end
+        end
+        if not silent and config.Callback then
+            task.spawn(config.Callback, color)
+        end
+    end
+
+    entry.SetRainbow = function(_, state)
+        local newState = state == true
+        if newState == isRainbow then
+            return
+        end
+        isRainbow = newState
+        Internal.Config.SetFlag((config.Flag or "") .. "__rainbow", newState)
+
+        Internal.Util.Tween(rainbowSwitch, {
+            BackgroundColor3 = isRainbow and palette.Accent or palette.Surface,
+            BackgroundTransparency = isRainbow and 0.06 or 0.5,
+        }, 0.24)
+
+        Internal.Util.Tween(rainbowKnob, {
+            Position = isRainbow and UDim2.new(1, -12, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+            BackgroundColor3 = isRainbow and palette.Background or palette.Muted,
+        }, 0.24)
+
+        Internal.Util.Tween(rainbowLabel, { TextColor3 = isRainbow and palette.Text or palette.SubText }, 0.24)
+
+        if rainbowConn then
+            rainbowConn:Disconnect()
+            rainbowConn = nil
+        end
+
+        if isRainbow then
+            s = 1
+            v = 1
+            rainbowConn = Internal.Util.Connect(Run.RenderStepped, function(dt)
+                h = (h + dt * (config.RainbowSpeed or 0.15)) % 1
+                updateColor(false, true)
+            end)
+        else
+            Internal.Config.Queue()
+        end
+    end
+
+    entry.Set = function(_, color, silent)
+        if typeof(color) ~= "Color3" then
+            return
+        end
+        entry:SetRainbow(false)
+        local nh, ns, nv = color:ToHSV()
+        h, s, v = nh, ns, nv
+        updateColor(silent)
+    end
+
+    entry.Get = function()
+        return entry.Value
+    end
+
+    Internal.Util.Connect(rainbowToggle.MouseButton1Click, function()
+        entry:SetRainbow(not isRainbow)
+    end)
+
+    local function toggleExpand(state)
+        expanded = state
+        Internal.Util.Tween(container, { Size = UDim2.new(1, 0, 0, expanded and 167 or 0) }, 0.3)
+    end
+
+    Internal.Util.Connect(header.MouseButton1Click, function()
+        toggleExpand(not expanded)
+    end)
+
+    Internal.Util.Hover(header, function()
+        Internal.Util.Tween(label, { TextColor3 = palette.Text }, 0.16)
+    end, function()
+        Internal.Util.Tween(label, { TextColor3 = palette.SubText }, 0.2)
+    end)
+
+    local function handleDrag(frame, callback)
+        local dragging = false
+        Internal.Util.Connect(frame.InputBegan, function(input)
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+            dragging = true
+            Internal.Window.BlockDrag = true
+            callback(input.Position)
+        end)
+        Internal.Util.Connect(UserInput.InputChanged, function(input)
+            if not dragging then
+                return
+            end
+            if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+                callback(input.Position)
+            end
+        end)
+        Internal.Util.Connect(UserInput.InputEnded, function(input)
+            if not dragging then
+                return
+            end
+            if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+            dragging = false
+            Internal.Window.BlockDrag = false
+            Internal.Config.Queue()
+        end)
+    end
+
+    handleDrag(sv, function(pos)
+        entry:SetRainbow(false)
+        local size = sv.AbsoluteSize
+        local origin = sv.AbsolutePosition
+        s = math.clamp((pos.X - origin.X) / math.max(size.X, 1), 0, 1)
+        v = 1 - math.clamp((pos.Y - origin.Y) / math.max(size.Y, 1), 0, 1)
+        updateColor()
+    end)
+
+    handleDrag(hueBar, function(pos)
+        entry:SetRainbow(false)
+        h = math.clamp((pos.X - hueBar.AbsolutePosition.X) / math.max(hueBar.AbsoluteSize.X, 1), 0, 1)
+        updateColor()
+    end)
+
+    Internal.Util.Connect(hexBox.FocusLost, function()
+        local hex = hexBox.Text:gsub("#", "")
+        if #hex == 6 and tonumber(hex, 16) then
+            entry:Set(Color3.fromHex(hex))
+        else
+            updateColor(true)
+        end
+    end)
+
+    updateColor(true)
+    local rainbow = config.Rainbow
+    if not rainbow and Internal.State.Saved[(config.Flag or "") .. "__rainbow"] == true then
+        rainbow = true
+    end
+    if rainbow then
+        entry:SetRainbow(true)
+    end
+
+    if config.Callback then
+        task.spawn(config.Callback, entry.Value)
+    end
+
+    return entry
+end
+
+Internal.Components.Paragraph = function(parent, config, order)
+    local root = Internal.Util.New("Frame", {
+        Name = "Option",
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        LayoutOrder = order,
+        Parent = parent,
+    }, { Internal.Util.List(3) })
+
+    local title
+    if config.Title then
+        title = Internal.Util.Label({
+            Text = config.Title,
+            TextSize = 12,
+            Weight = Internal.Layout.Weight.SemiBold,
+            Size = UDim2.new(1, 0, 0, 14),
+            Parent = root,
+        })
+    end
+
+    local body = Internal.Util.Label({
+        Text = config.Text or "",
+        TextSize = 12,
+        ColorKey = "SubText",
+        TextWrapped = true,
+        AutomaticSize = Enum.AutomaticSize.Y,
+        Size = UDim2.new(1, 0, 0, 0),
+        Parent = root,
+    })
+
+    return {
+        Type = "Paragraph",
+        Root = root,
+        Set = function(_, text)
+            body.Text = text
+        end,
+        SetTitle = function(_, text)
+            if title then
+                title.Text = text
+            end
+        end,
+    }
+end
+
+Internal.Components.Divider = function(parent, config, order)
+    local root = Internal.Components.OptionRoot(parent, 9, order)
+    Internal.Theme.Bind(Internal.Util.New("Frame", {
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, 0, 0.5, 0),
+        Size = UDim2.new(1, 0, 0, 1),
+        BackgroundTransparency = 0.4,
+        BorderSizePixel = 0,
+        Parent = root,
+    }), "BackgroundColor3", "Border")
+    return { Type = "Divider", Root = root }
+end
+
+do
+    local moduleMeta = {}
+    moduleMeta.__index = moduleMeta
+
+    Internal.Module.Create = function(tab, config)
+        local obj = setmetatable({}, moduleMeta)
+        obj.Tab = tab
+        obj.Config = config
+        obj.Title = config.Title or "Module"
+        obj.Flag = config.Flag
+        obj.Toggleable = config.Toggleable ~= false and config.Flag ~= nil
+        obj.Enabled = false
+        obj.Expanded = false
+        obj.Order = 0
+        obj.Keyword = (obj.Title .. " " .. (config.Description or "")):lower()
+
+        local hasDesc = config.Description ~= nil and config.Description ~= ""
+        local hasKeybind = obj.Toggleable and config.Keybind ~= false and obj.Flag ~= nil and not Env.Mobile
+        local hasBell = obj.Toggleable and config.Notify == true and obj.Flag ~= nil
+        local headerH = hasKeybind and 46 + 30 or 46
+        local keybindOffset = hasKeybind and 46 + 15 or 23
+
+        obj.Side = (config.Side or "Left"):lower()
+        obj.Column = obj.Side == "right" and tab.Right or tab.Left
+        obj.LayoutOrder = #obj.Column:GetChildren()
+        local moduleTransparency = 0.15 + 0.85 * math.clamp(tonumber(ZenthraUI.Flags.gui_module_transparency) or 0, 0, 1)
+
+        local frame = Internal.Util.New("Frame", {
+            Name = "Module",
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = moduleTransparency,
+            BorderSizePixel = 0,
+            ClipsDescendants = true,
+            LayoutOrder = obj.LayoutOrder,
+            Parent = obj.Column,
+        }, {
+            Internal.Util.Corner(10),
+            Internal.Util.Stroke("Border", 1, 0.3),
+            Internal.Util.List(0),
+        })
+        Internal.Theme.Bind(frame, "BackgroundColor3", "Surface")
+        obj.Frame = frame
+        obj.Stroke = frame:FindFirstChildOfClass("UIStroke")
+
+        local header = Internal.Util.New("TextButton", {
+            Name = "Header",
+            Text = "",
+            AutoButtonColor = false,
+            Size = UDim2.new(1, 0, 0, headerH),
+            BackgroundTransparency = 1,
+            Parent = frame,
+        })
+        obj.Header = header
+
+        local titleLabel = Internal.Util.Label({
+            Text = obj.Title,
+            TextSize = 13,
+            Weight = Internal.Layout.Weight.SemiBold,
+            TextTruncate = Enum.TextTruncate.AtEnd,
+            Position = UDim2.new(0, 13, 0, hasDesc and 10 or 0),
+            Size = UDim2.new(1, -30, 0, hasDesc and 15 or 46),
+            Parent = header,
+        })
+
+        if hasDesc then
+            Internal.Util.Label({
+                Text = config.Description,
+                TextSize = 11,
+                ColorKey = "SubText",
+                TextTruncate = Enum.TextTruncate.AtEnd,
+                Position = UDim2.new(0, 13, 0, 28),
+                Size = UDim2.new(1, -30, 0, 12),
+                Parent = header,
+            })
+        end
+
+        local body = Internal.Util.New("Frame", {
+            Name = "Body",
+            Size = UDim2.new(1, 0, 0, 0),
+            BackgroundTransparency = 1,
+            ClipsDescendants = true,
+            LayoutOrder = 2,
+            Parent = frame,
+        })
+        obj.Body = body
+
+        local content = Internal.Util.New("Frame", {
+            Size = UDim2.new(1, 0, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1,
+            Parent = body,
+        }, {
+            Internal.Util.Padding(10, 13, 13, 13),
+            Internal.Util.List(9),
+        })
+        obj.Content = content
+        local uiListLayout = content:FindFirstChildOfClass("UIListLayout")
+
+        Internal.Theme.Bind(Internal.Util.New("Frame", {
+            Size = UDim2.new(1, -26, 0, 1),
+            Position = UDim2.new(0, 13, 0, 0),
+            BackgroundTransparency = 0.5,
+            BorderSizePixel = 0,
+            Parent = body,
+        }), "BackgroundColor3", "Border")
+
+        local toggleSwitch, toggleKnob
+        if obj.Toggleable then
+            if hasKeybind then
+                Internal.Theme.Bind(Internal.Util.New("Frame", {
+                    Position = UDim2.new(0, 13, 0, 46),
+                    Size = UDim2.new(1, -26, 0, 1),
+                    BackgroundTransparency = 0.6,
+                    BorderSizePixel = 0,
+                    Parent = header,
+                }), "BackgroundColor3", "Border")
+            end
+
+            local rightContainer = Internal.Util.New("Frame", {
+                AnchorPoint = Vector2.new(1, 0.5),
+                Position = UDim2.new(1, -13, 0, keybindOffset),
+                Size = UDim2.fromOffset(0, 20),
+                AutomaticSize = Enum.AutomaticSize.X,
+                BackgroundTransparency = 1,
+                Parent = header,
+            }, { Internal.Util.FlexRow(9) })
+
+            if hasBell then
+                Internal.Binds.AttachBell({ Parent = rightContainer, LayoutOrder = 1, Flag = obj.Flag, Size = 14 })
+            end
+
+            toggleSwitch = Internal.Util.New("Frame", {
+                Size = UDim2.fromOffset(30, 18),
+                BackgroundTransparency = 0.45,
+                BorderSizePixel = 0,
+                LayoutOrder = 2,
+                Parent = rightContainer,
+            }, { Internal.Util.Corner(UDim.new(1, 0)), Internal.Util.Stroke("Border", 1, 0.2) })
+            Internal.Theme.Bind(toggleSwitch, "BackgroundColor3", "SurfaceAlt")
+
+            toggleKnob = Internal.Util.New("Frame", {
+                AnchorPoint = Vector2.new(0, 0.5),
+                Position = UDim2.new(0, 3, 0.5, 0),
+                Size = UDim2.fromOffset(12, 12),
+                BorderSizePixel = 0,
+                Parent = toggleSwitch,
+            }, { Internal.Util.Corner(UDim.new(1, 0)) })
+            Internal.Theme.Bind(toggleKnob, "BackgroundColor3", "Muted")
+
+            Internal.Util.Connect(Internal.Util.New("TextButton", {
+                Text = "",
+                AutoButtonColor = false,
+                BackgroundTransparency = 1,
+                AnchorPoint = Vector2.new(0.5, 0.5),
+                Position = UDim2.fromScale(0.5, 0.5),
+                Size = UDim2.new(1, Env.Mobile and 18 or 12, 1, Env.Mobile and 18 or 12),
+                Parent = toggleSwitch,
+            }).MouseButton1Click, function()
+                obj:SetEnabled(not obj.Enabled)
+            end)
+        end
+
+        local function getBodyHeight()
+            local scale = tab.Window.Scale.Scale
+            local rootScale = tab.Window.RootScale
+            if rootScale then
+                scale = scale * rootScale.Scale
+            end
+            return uiListLayout.AbsoluteContentSize.Y / math.max(scale, 0.01) + 23
+        end
+
+        obj.Resize = function(_, animated)
+            if not obj.Expanded then
+                return
+            end
+            local h = getBodyHeight()
+            if animated == false then
+                body.Size = UDim2.new(1, 0, 0, h)
+            else
+                Internal.Util.Tween(body, { Size = UDim2.new(1, 0, 0, h) }, 0.3)
+            end
+        end
+
+        Internal.Util.Connect(uiListLayout:GetPropertyChangedSignal("AbsoluteContentSize"), function()
+            obj:Resize(true)
+        end)
+
+        obj.SetExpanded = function(_, expanded, animated)
+            if #content:GetChildren() <= 2 then
+                expanded = false
+            end
+            obj.Expanded = expanded
+            local targetH = expanded and getBodyHeight() or 0
+            if animated == false then
+                body.Size = UDim2.new(1, 0, 0, targetH)
+            else
+                Internal.Util.Tween(body, { Size = UDim2.new(1, 0, 0, targetH) }, 0.34)
+            end
+        end
+
+        obj.SetEnabled = function(_, state, silent, instant)
+            local enabled = state == true
+            obj.Enabled = enabled
+            Internal.Config.SetFlag(obj.Flag, enabled)
+
+            if toggleSwitch then
+                Internal.Util.Tween(toggleSwitch, {
+                    BackgroundColor3 = enabled and palette.Accent or palette.SurfaceAlt,
+                    BackgroundTransparency = enabled and 0.05 or 0.45,
+                }, 0.26)
+
+                Internal.Util.Tween(toggleKnob, {
+                    Position = enabled and UDim2.new(1, -15, 0.5, 0) or UDim2.new(0, 3, 0.5, 0),
+                    BackgroundColor3 = enabled and palette.Background or palette.Muted,
+                }, 0.32)
+            end
+
+            Internal.Util.Tween(obj.Stroke, { Color = enabled and palette.Accent or palette.Border, Transparency = enabled and 0.3 or 0.3 }, 0.3)
+            Internal.Util.Tween(titleLabel, { TextColor3 = (enabled or not obj.Toggleable) and palette.Text or palette.SubText }, 0.26)
+
+            if obj.Toggleable then
+                obj:SetExpanded(true, not instant)
+            end
+
+            if not silent then
+                if config.Callback then
+                    task.spawn(config.Callback, enabled)
+                end
+            end
+        end
+
+        obj.Get = function()
+            return obj.Enabled
+        end
+
+        if hasKeybind then
+            Internal.Binds.AttachKeybind({
+                Parent = header,
+                Host = header,
+                AnchorPoint = Vector2.new(0, 0.5),
+                Position = UDim2.new(0, 12, 0, keybindOffset),
+                Flag = obj.Flag,
+                Label = obj.Title,
+                MaxWidth = 84,
+                OnPress = function()
+                    obj:SetEnabled(not obj.Enabled)
+                end,
+            })
+        end
+
+        Internal.Util.Connect(header.MouseButton1Click, function()
+            if not obj.Toggleable then
+                return
+            end
+            obj:SetEnabled(not obj.Enabled)
+        end)
+
+        Internal.Util.Hover(header, function()
+            if not obj.Enabled then
+                Internal.Util.Tween(obj.Stroke, { Color = palette.Muted, Transparency = 0.55 }, 0.09)
+            end
+            Internal.Util.Tween(titleLabel, { TextColor3 = palette.Text }, 0.18)
+        end, function()
+            if not obj.Enabled then
+                Internal.Util.Tween(obj.Stroke, { Color = palette.Border, Transparency = 0.3 }, 0.22)
+                if obj.Toggleable then
+                    Internal.Util.Tween(titleLabel, { TextColor3 = palette.SubText }, 0.22)
+                end
+            end
+        end)
+
+        obj:SetEnabled(Internal.State.Saved[obj.Flag] == true, true, true)
+        if obj.Enabled and config.Callback then
+            task.spawn(config.Callback, true)
+        end
+
+        table.insert(tab.Modules, obj)
+        return obj
+    end
+
+    for k, component in pairs(Internal.Components) do
+        moduleMeta[k] = function(self, config)
+            config = config or {}
+            self.Order = self.Order + 1
+            local entry = component(self.Content, config, self.Order)
+            if config.Flag then
+                ZenthraUI.Options[config.Flag] = entry
+            end
+            self.Keyword = self.Keyword .. " " .. (config.Title or ""):lower()
+            if not self.Expanded then
+                self:SetExpanded(true, false)
+            end
+            return entry
+        end
+    end
+
+    moduleMeta.Label = function(self, text)
+        return self:Paragraph({ Text = type(text) == "table" and text.Text or text })
+    end
+end
+
+Internal.Page.Create = function(parent)
+    local page = Internal.Util.New("CanvasGroup", {
+        Name = "Page",
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        GroupTransparency = 1,
+        Visible = false,
+        Parent = parent,
+    })
+
+    local scroller = Internal.Util.New("ScrollingFrame", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 3,
+        ScrollBarImageTransparency = 0.45,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        CanvasSize = UDim2.new(),
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        Parent = page,
+    })
+    Internal.Theme.Bind(scroller, "ScrollBarImageColor3", "SubText")
+
+    local content = Internal.Util.New("Frame", {
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        Parent = scroller,
+    }, {
+        Internal.Util.Padding(14, 16, 15, 10),
+        Internal.Util.New("UIListLayout", {
+            Padding = UDim.new(0, 12),
+            FillDirection = Enum.FillDirection.Horizontal,
+            SortOrder = Enum.SortOrder.LayoutOrder,
+        }),
+    })
+
+    local function makeColumn(order)
+        return Internal.Util.New("Frame", {
+            Name = "Column",
+            Size = UDim2.new(0.5, -6, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y,
+            BackgroundTransparency = 1,
+            LayoutOrder = order,
+            Parent = content,
+        }, { Internal.Util.List(10) })
+    end
+
+    return page, scroller, makeColumn(1), makeColumn(2)
+end
+
+Internal.Tab.IndicatorPosition = function(window, tab)
+    local pos = Internal.Layout.TabPad
+    for _, t in ipairs(window.Tabs) do
+        if t == tab then
+            return UDim2.fromOffset(Internal.Layout.TabPad, pos)
+        end
+        pos = pos + Internal.Layout.TabH + Internal.Layout.TabGap
+    end
+    return UDim2.fromOffset(Internal.Layout.TabPad, Internal.Layout.TabPad)
+end
+
+Internal.Tab.SlideIndicator = function(window, tab, animated)
+    local indicator = window.Indicator
+    if not indicator or not tab then
+        return
+    end
+    local pos = Internal.Tab.IndicatorPosition(window, tab)
+    indicator.Visible = true
+    indicator.Size = UDim2.new(1, -(Internal.Layout.TabPad * 2), 0, Internal.Layout.TabH)
+
+    if window.TabIndicatorTween then
+        window.TabIndicatorTween:Cancel()
+        window.TabIndicatorTween = nil
+    end
+
+    if not animated then
+        indicator.Position = pos
+        return
+    end
+    window.TabIndicatorTween = Internal.Util.Tween(indicator, { Position = pos }, Internal.Layout.TabIndicatorSlide)
+end
+
+Internal.Tab.Create = function(window, config)
+    local tab = {
+        Window = window,
+        Title = config.Title or "Tab",
+        Modules = {},
+        Index = #window.Tabs + 1,
+        Internal = config.Internal == true,
+    }
+
+    local button = Internal.Util.New("TextButton", {
+        Name = "Tab",
+        Text = "",
+        AutoButtonColor = false,
+        Size = UDim2.new(1, 0, 0, Internal.Layout.TabH),
+        BackgroundTransparency = 1,
+        ZIndex = 2,
+        LayoutOrder = tab.Internal and 0 or tab.Index,
+        Parent = window.TabHolder,
+    })
+    tab.Button = button
+
+    local frame = Internal.Util.New("Frame", {
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        Parent = button,
+    }, { Internal.Util.FlexRow(9), Internal.Util.Padding(0, 0, 12, 12) })
+
+    local icon
+    if config.Icon then
+        icon = Internal.Util.Image({
+            Image = config.Icon,
+            Size = UDim2.fromOffset(15, 15),
+            ImageTransparency = 0.35,
+            ColorKey = "SubText",
+            LayoutOrder = 1,
+            Parent = frame,
+        })
+    end
+
+    local label = Internal.Util.Label({
+        Text = tab.Title,
+        TextSize = 12.5,
+        Weight = Internal.Layout.Weight.Medium,
+        ColorKey = "SubText",
+        AutomaticSize = Enum.AutomaticSize.X,
+        Size = UDim2.new(0, 0, 1, 0),
+        LayoutOrder = 2,
+        Parent = frame,
+    })
+
+    local page, scroller, leftCol, rightCol = Internal.Page.Create(window.Content)
+    tab.Page = page
+    tab.Scroller = scroller
+    tab.Left = leftCol
+    tab.Right = rightCol
+
+    tab.Select = function(_, animated)
+        if window.SearchBox and window.SearchBox.Text ~= "" then
+            window.SearchBox.Text = ""
+        end
+        if window.ActiveTab == tab then
+            return
+        end
+        local oldTab = window.ActiveTab
+        window.ActiveTab = tab
+        local useAnim = animated ~= false
+
+        if oldTab then
+            Internal.Util.Tween(oldTab.Page, { GroupTransparency = 1 }, useAnim and 0.16 or 0)
+            task.delay(useAnim and 0.16 or 0, function()
+                if window.ActiveTab ~= oldTab then
+                    oldTab.Page.Visible = false
+                end
+            end)
+            Internal.Util.Tween(oldTab.Label, { TextColor3 = palette.SubText }, useAnim and 0.2 or 0)
+            if oldTab.Glyph then
+                Internal.Util.Tween(oldTab.Glyph, { ImageColor3 = palette.SubText, ImageTransparency = 0.35 }, useAnim and 0.2 or 0)
+            end
+        end
+
+        page.Visible = true
+        if useAnim then
+            page.GroupTransparency = 1
+            page.Position = UDim2.fromOffset(0, 8)
+            Internal.Util.Tween(page, { GroupTransparency = 0, Position = UDim2.fromOffset(0, 0) }, 0.2)
+            Internal.Util.Tween(label, { TextColor3 = palette.Text }, 0.22)
+            if icon then
+                Internal.Util.Tween(icon, { ImageColor3 = palette.Accent, ImageTransparency = 0 }, 0.22)
+            end
+        else
+            page.GroupTransparency = 0
+            page.Position = UDim2.fromOffset(0, 0)
+            label.TextColor3 = palette.Text
+            if icon then
+                icon.ImageColor3 = palette.Accent
+                icon.ImageTransparency = 0
+            end
+        end
+
+        tab:SyncIndicator(useAnim and oldTab ~= nil)
+    end
+
+    tab.SyncIndicator = function(_, animated)
+        if window.ActiveTab ~= tab then
+            return
+        end
+        Internal.Tab.SlideIndicator(window, tab, animated == true)
+    end
+
+    tab.Module = function(_, modConfig)
+        return Internal.Module.Create(tab, modConfig or {})
+    end
+
+    tab.Text = label
+    tab.Glyph = icon
+
+    Internal.Util.Connect(button.MouseButton1Click, function()
+        tab:Select()
+    end)
+
+    Internal.Util.Hover(button, function()
+        if window.ActiveTab ~= tab then
+            Internal.Util.Tween(label, { TextColor3 = palette.Text }, 0.16)
+            if icon then
+                Internal.Util.Tween(icon, { ImageTransparency = 0.1 }, 0.16)
+            end
+        end
+    end, function()
+        if window.ActiveTab ~= tab then
+            Internal.Util.Tween(label, { TextColor3 = palette.SubText }, 0.2)
+            if icon then
+                Internal.Util.Tween(icon, { ImageTransparency = 0.35 }, 0.2)
+            end
+        end
+    end)
+
+    table.insert(window.Tabs, tab)
+    if not tab.Internal and (window.ActiveTab == nil or window.ActiveTab.Internal) then
+        tab:Select(true)
+    end
+
+    task.defer(function()
+        if window.ActiveTab == tab then
+            tab:SyncIndicator(false)
+        end
+    end)
+
+    return tab
+end
+
+local function setupMediaSystem()
+    local media = {
+        Seq = 0,
+        Active = false,
+        Opacity = 0.45,
+    }
+
+    function media.ApiBase()
+        local url = tostring(getgenv and getgenv().ZENTHRA_SHEET_API or ZenthraUI.SheetApiUrl or ""):gsub("^%s+", ""):gsub("%s+$", ""):gsub("/+$", "")
+        if not url:match("^https?://") then
+            return nil
+        end
+        return url
+    end
+
+    local function getMediaFolder()
+        return tostring(ZenthraUI.MediaFolder or "Zenthra/backgrounds")
+    end
+
+    local function hasFilesystem()
+        return Env.Filesystem and typeof(listfiles) == "function"
+    end
+
+    local function ensureFolder()
+        if not Env.Filesystem then
+            return false
+        end
+        local folder = getMediaFolder()
+        local root = folder:match("^([^/\\]+)")
+        pcall(function()
+            if root and not isfolder(root) then
+                makefolder(root)
+            end
+            if not isfolder(folder) then
+                makefolder(folder)
+            end
+        end)
+        return isfolder(folder)
+    end
+
+    local function urlEncode(str)
+        if type(str) ~= "string" then
+            return ""
+        end
+        return (str:gsub("[^%w%-_%.~]", function(c)
+            return string.format("%%%02X", string.byte(c))
+        end))
+    end
+
+    local function getRequest()
+        if typeof(request) == "function" then
+            return request
+        end
+        if typeof(http_request) == "function" then
+            return http_request
+        end
+        if syn and typeof(syn.request) == "function" then
+            return syn.request
+        end
+        return nil
+    end
+
+    local function getAsset(path)
+        if typeof(getcustomasset) == "function" then
+            return getcustomasset(path)
+        end
+        if typeof(getsynasset) == "function" then
+            return getsynasset(path)
+        end
+        return nil
+    end
+
+    local function base64Decode(str)
+        if crypt and typeof(crypt.base64decode) == "function" then
+            return crypt.base64decode(str)
+        end
+        if crypt and crypt.base64 and typeof(crypt.base64.decode) == "function" then
+            return crypt.base64.decode(str)
+        end
+
+        local lookup = {}
+        for i = 1, 64 do
+            lookup[string.byte("ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/", i)] = i - 1
+        end
+
+        str = str:gsub("[^%w%+/=]", "")
+        local out = {}
+        local pos = 1
+        local idx = 1
+
+        while pos <= #str do
+            local a = lookup[string.byte(str, pos)]
+            local b = lookup[string.byte(str, pos + 1)]
+            if not a or not b then
+                break
+            end
+            local c = string.byte(str, pos + 2) and lookup[string.byte(str, pos + 2)]
+            local d = string.byte(str, pos + 3) and lookup[string.byte(str, pos + 3)]
+
+            out[idx] = string.char(a * 4 + math.floor(b / 16))
+            idx = idx + 1
+            if c then
+                out[idx] = string.char(b % 16 * 16 + math.floor(c / 4))
+                idx = idx + 1
+                if d then
+                    out[idx] = string.char(c % 4 * 64 + d)
+                    idx = idx + 1
+                end
+            end
+            pos = pos + 4
+        end
+        return table.concat(out)
+    end
+
+    local function base64Encode(str)
+        if crypt and typeof(crypt.base64encode) == "function" then
+            return crypt.base64encode(str)
+        end
+        if crypt and crypt.base64 and typeof(crypt.base64.encode) == "function" then
+            return crypt.base64.encode(str)
+        end
+
+        local out = {}
+        local alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+        for i = 1, #str, 3 do
+            local a, b, c = string.byte(str, i, i + 2)
+            local n = a * 65536 + (b or 0) * 256 + (c or 0)
+            out[#out + 1] = alphabet:sub(math.floor(n / 262144) % 64 + 1, math.floor(n / 262144) % 64 + 1)
+            out[#out + 1] = alphabet:sub(math.floor(n / 4096) % 64 + 1, math.floor(n / 4096) % 64 + 1)
+            out[#out + 1] = b and alphabet:sub(math.floor(n / 64) % 64 + 1, math.floor(n / 64) % 64 + 1) or "="
+            out[#out + 1] = c and alphabet:sub(n % 64 + 1, n % 64 + 1) or "="
+        end
+        return table.concat(out)
+    end
+
+    local function loadAsset(path)
+        local fullPath = getMediaFolder() .. "/" .. path
+        local ok, result = pcall(readfile, fullPath)
+        if not ok or type(result) ~= "string" or #result == 0 then
+            return getAsset(fullPath)
+        end
+        local hash = #result % 16777213
+        for i = 1, #result, math.max(1, math.floor(#result / 64)) do
+            hash = (hash * 31 + result:byte(i)) % 16777213
+        end
+        local cacheDir = getMediaFolder() .. "/.cache"
+        local cachePath = cacheDir .. "/" .. string.format("%x", hash) .. "." .. (path:match("%.(%w+)$") or "png")
+        return getAsset(pcall(function()
+            if not isfolder(cacheDir) then
+                makefolder(cacheDir)
+            end
+            if not isfile(cachePath) then
+                writefile(cachePath, result)
+            end
+        end) and cachePath or fullPath)
+    end
+
+    local function parseApiResponse(raw)
+        local ok, result = pcall(function()
+            return Http:JSONDecode(raw)
+        end)
+        if not ok or type(result) ~= "table" then
+            return nil, "Bad API response"
+        end
+        if not result.ok then
+            return nil, tostring(result.error or "API error")
+        end
+        if not result.multi or type(result.images) ~= "table" or #result.images == 0 then
+            return nil, "API returned no pages"
+        end
+        local pages = {}
+        for i, img in ipairs(result.images) do
+            local decoded = base64Decode(img)
+            if type(decoded) ~= "string" or #decoded == 0 then
+                return nil, "Could not decode page " .. i
+            end
+            pages[i] = decoded
+        end
+        return pages, {
+            cols = result.cols,
+            cellW = result.cellW,
+            cellH = result.cellH,
+            count = result.count,
+            counts = result.counts,
+            delayMs = result.delayMs or 100,
+            ext = (result.ext == "jpg" or result.ext == "png") and result.ext or "jpg",
+        }
+    end
+
+    local function httpRequest(url, method, headers, body)
+        local req = getRequest()
+        if req then
+            local ok, result = pcall(req, { Url = url, Method = method or "GET", Headers = headers, Body = body })
+            if ok and type(result) == "table" and type(result.Body) == "string" and #result.Body > 0 then
+                return result.Body, result.StatusCode or result.Status
+            end
+        end
+        if (method or "GET") == "GET" and not body then
+            local ok, result = pcall(function()
+                return game:HttpGet(url, true)
+            end)
+            if ok and type(result) == "string" and result ~= "" then
+                return result, 200
+            end
+        end
+        return nil, nil
+    end
+
+    local function fetchRawData(url)
+        local body, status = httpRequest(url, "GET", {
+            ["User-Agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36",
+            Accept = "image/avif,image/webp,image/apng,image/*,video/*,*/*;q=0.8",
+            Referer = (url:match("^(https?://[^/]+)") or "") .. "/",
+        })
+        if type(body) ~= "string" or #body < 32 then
+            return nil
+        end
+        if status and status ~= 200 then
+            return nil
+        end
+        local sniff = body:sub(1, 200):lower()
+        if sniff:find("<!doctype", 1, true) or sniff:find("<html", 1, true) or sniff:find("just a moment", 1, true) then
+            return nil
+        end
+        return body
+    end
+
+    local function detectFormat(raw)
+        if type(raw) ~= "string" or #raw < 12 then
+            return nil
+        end
+        if raw:sub(1, 8) == "\137PNG\r\n\26\n" then
+            return "png"
+        end
+        if raw:byte(1) == 0xFF and raw:byte(2) == 0xD8 then
+            return "jpg"
+        end
+        if raw:sub(1, 4) == "GIF8" then
+            return "gif"
+        end
+        if raw:sub(1, 4) == "RIFF" and raw:sub(9, 12) == "WEBP" then
+            return "webp"
+        end
+        if raw:sub(1, 4) == "ftyp" then
+            local brand = raw:sub(5, 12):lower()
+            if brand:find("avif", 1, true) or brand:find("avis", 1, true) then
+                return "avif"
+            end
+            if brand:find("heic", 1, true) or brand:find("heif", 1, true) then
+                return "heic"
+            end
+            if brand:find("mp4", 1, true) or brand:find("isom", 1, true) then
+                return "mp4"
+            end
+        end
+        if raw:byte(1) == 0x1A and raw:byte(2) == 0x45 then
+            return "webm"
+        end
+        return nil
+    end
+
+    local function deleteMediaFile(name)
+        local validExts = { "png", "jpg", "jpeg", "webp", "bmp", "gif", "mp4", "webm", "mov" }
+        for _, ext in ipairs(validExts) do
+            pcall(delfile, getMediaFolder() .. "/" .. name .. "." .. ext)
+            pcall(delfile, getMediaFolder() .. "/" .. name .. "." .. ext .. ".json")
+            local i = 2
+            while typeof(isfile) == "function" and isfile(getMediaFolder() .. "/" .. name .. ".p" .. i .. "." .. ext) do
+                pcall(delfile, getMediaFolder() .. "/" .. name .. ".p" .. i .. "." .. ext)
+                i = i + 1
+            end
+        end
+    end
+
+    local function saveMediaFile(raw, ext, name)
+        name = tostring(name or ""):gsub("[%\\/:%*%?\"<>|]", ""):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%.%w+$", "")
+        if name == "" then
+            name = "media_" .. tostring(os.time())
+        end
+        local filename = name .. "." .. ext
+        if not pcall(function()
+            ensureFolder()
+            deleteMediaFile(name)
+            writefile(getMediaFolder() .. "/" .. filename, raw)
+        end) then
+            return false, "Could not write the file"
+        end
+        return true, filename
+    end
+
+    local function convertViaApi(raw, ext, name)
+        local api = media.ApiBase()
+        if not api then
+            return nil, "API URL must start with http"
+        end
+        local encoded = base64Encode(raw)
+        if type(encoded) ~= "string" or encoded == "" then
+            return nil, "Could not encode media for upload"
+        end
+        local json = Http:JSONEncode({ data = encoded, name = name })
+        local body = httpRequest(api .. "/sheet?multi=1&quality=original&fmt=png&format=json", "POST", { ["Content-Type"] = "application/json" }, json)
+        if not body then
+            return nil, "Upload to API failed"
+        end
+        return parseApiResponse(body)
+    end
+
+    function media.List()
+        local list = { "None" }
+        if not hasFilesystem() or not isfolder(getMediaFolder()) then
+            return list
+        end
+        local ok, files = pcall(listfiles, getMediaFolder())
+        if not ok or type(files) ~= "table" then
+            return list
+        end
+        for _, file in ipairs(files) do
+            local filename = file:match("([^/\\]+)$")
+            if filename and not filename:lower():match("%.p%d+%.%w+$") and not filename:lower():match("%.json$") and filename ~= ".cache" then
+                local ext = filename:match("%.(%w+)$")
+                if ext then
+                    ext = ext:lower()
+                    if ext == "png" or ext == "jpg" or ext == "jpeg" or ext == "webp" or ext == "bmp" or ext == "gif" or ext == "mp4" or ext == "webm" or ext == "mov" then
+                        table.insert(list, filename)
+                    end
+                end
+            end
+        end
+        return list
+    end
+
+    function media.Save(url, name)
+        if not hasFilesystem() then
+            return false, "Executor does not support file system"
+        end
+        local raw = fetchRawData(url)
+        local fmt = raw and detectFormat(raw)
+        local staticFormats = { png = true, jpg = true, jpeg = true, webp = true, bmp = true }
+        if raw and fmt and staticFormats[fmt] then
+            return saveMediaFile(raw, fmt == "jpeg" and "jpg" or fmt, name)
+        end
+
+        if raw and (fmt == "avif" or fmt == "heic") then
+            local pages, metadata = convertViaApi(raw, fmt, "upload_" .. fmt)
+            if not pages then
+                return false, metadata
+            end
+            name = tostring(name or ""):gsub("[%\\/:%*%?\"<>|]", ""):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%.%w+$", "")
+            if name == "" then
+                name = "media_" .. tostring(os.time())
+            end
+            local filename = name .. "." .. ((metadata.ext == "png" or metadata.ext == "jpg") and metadata.ext or "jpg")
+            if not pcall(function()
+                ensureFolder()
+                deleteMediaFile(name)
+                writefile(getMediaFolder() .. "/" .. filename, pages[1])
+            end) then
+                return false, "Could not write the file"
+            end
+            return true, filename
+        end
+
+        local api = media.ApiBase()
+        if not api then
+            return false, "API URL must start with http"
+        end
+        local body = httpRequest(api .. "/sheet?url=" .. urlEncode(url) .. "&multi=1&quality=original&fmt=jpg&format=json", "GET")
+        if not body then
+            return false, "Request failed, is the API up?"
+        end
+        local pages, metadata = parseApiResponse(body)
+        if not pages then
+            return false, metadata
+        end
+
+        name = tostring(name or ""):gsub("[%\\/:%*%?\"<>|]", ""):gsub("^%s+", ""):gsub("%s+$", ""):gsub("%.%w+$", "")
+        if name == "" then
+            name = "media_" .. tostring(os.time())
+        end
+
+        local isSingle = #pages == 1 and (metadata.count or 1) <= 1
+        if isSingle then
+            local filename = name .. "." .. ((metadata.ext == "png" or metadata.ext == "jpg") and metadata.ext or "jpg")
+            if not pcall(function()
+                ensureFolder()
+                deleteMediaFile(name)
+                writefile(getMediaFolder() .. "/" .. filename, pages[1])
+            end) then
+                return false, "Could not write the file"
+            end
+            return true, filename
+        end
+
+        local files = { name .. "." .. metadata.ext }
+        for i = 2, #pages do
+            files[i] = name .. ".p" .. i .. "." .. metadata.ext
+        end
+        if not pcall(function()
+            ensureFolder()
+            deleteMediaFile(name)
+            for i, page in ipairs(pages) do
+                writefile(getMediaFolder() .. "/" .. files[i], page)
+            end
+            writefile(getMediaFolder() .. "/" .. files[1] .. ".json", Http:JSONEncode({
+                cols = metadata.cols,
+                cellW = metadata.cellW,
+                cellH = metadata.cellH,
+                count = metadata.count,
+                counts = metadata.counts,
+                delayMs = metadata.delayMs,
+                pages = files,
+                ext = metadata.ext,
+            }))
+        end) then
+            return false, "Could not write the files"
+        end
+        return true, files[1]
+    end
+
+    function media.Stop(window)
+        media.Seq = media.Seq + 1
+        media.Active = false
+        local win = window or ZenthraUI.Windows[1]
+        if not win then
+            return
+        end
+        local canvas = win.BgCanvas
+        local wallpaper = win.Wallpaper
+        local video = win.BgVideo
+
+        if video then
+            pcall(function()
+                video:Pause()
+            end)
+            video.Visible = false
+            pcall(function()
+                video.Video = ""
+            end)
+        end
+        if wallpaper then
+            wallpaper.Image = ""
+            wallpaper.ImageTransparency = 1
+            wallpaper.ImageRectOffset = Vector2.zero
+            wallpaper.ImageRectSize = Vector2.zero
+            local preload = wallpaper:FindFirstChild("Preload")
+            if preload then
+                preload:Destroy()
+            end
+        end
+        if canvas then
+            canvas.Visible = false
+        end
+    end
+
+    function media.SetOpacity(opacity, window)
+        media.Opacity = math.clamp(tonumber(opacity) or 0.45, 0, 1)
+        local win = window or ZenthraUI.Windows[1]
+        if not win then
+            return
+        end
+        local canvas = win.BgCanvas
+        local wallpaper = win.Wallpaper
+        local video = win.BgVideo
+        if not canvas then
+            return
+        end
+        if wallpaper and wallpaper.Image ~= "" then
+            wallpaper.ImageTransparency = 1 - media.Opacity
+        end
+        canvas.GroupTransparency = video and video.Visible and 1 - media.Opacity or 0
+        if media.Active then
+            canvas.Visible = media.Opacity > 0.004
+        end
+    end
+
+    function media.ShowStatic(image, window)
+        media.Stop(window)
+        local win = window or ZenthraUI.Windows[1]
+        if not win or not win.BgCanvas or not win.Wallpaper or type(image) ~= "string" or image == "" then
+            return
+        end
+        win.BgCanvas.Visible = true
+        win.Wallpaper.Visible = true
+        win.Wallpaper.ImageRectOffset = Vector2.zero
+        win.Wallpaper.ImageRectSize = Vector2.zero
+        win.Wallpaper.Image = image
+        win.Wallpaper.ScaleType = Enum.ScaleType.Stretch
+        media.Active = true
+        media.SetOpacity(media.Opacity, win)
+    end
+
+    function media.PlayPages(assets, metadata, window)
+        media.Stop(window)
+        media.Seq = media.Seq + 1
+        local seq = media.Seq
+        local win = window or ZenthraUI.Windows[1]
+        if not win or not win.BgCanvas or not win.Wallpaper or not metadata or (metadata.count or 0) < 1 then
+            return
+        end
+
+        local cellW = metadata.cellW
+        local cellH = metadata.cellH
+        local cols = metadata.cols
+        local frames = {}
+        local idx = 0
+
+        for i, asset in ipairs(assets) do
+            local counts = metadata.counts and metadata.counts[i] or metadata.count
+            for i2 = 0, counts - 1 do
+                idx = idx + 1
+                frames[idx] = { asset, i2 % cols * cellW, math.floor(i2 / cols) * cellH }
+                if metadata.count <= idx then
+                    break
+                end
+            end
+            if metadata.count <= idx then
+                break
+            end
+        end
+
+        if idx == 0 then
+            return
+        end
+
+        local folder = Instance.new("Folder")
+        folder.Name = "Preload"
+        folder.Parent = win.Wallpaper
+        local preloadMap = {}
+        for _, asset in ipairs(assets) do
+            local img = Instance.new("ImageLabel")
+            img.Size = UDim2.fromOffset(1, 1)
+            img.BackgroundTransparency = 1
+            img.ImageTransparency = 0.996
+            img.Image = asset
+            img.Parent = folder
+            preloadMap[asset] = img
+        end
+
+        win.BgCanvas.Visible = true
+        win.Wallpaper.Visible = true
+        win.Wallpaper.Image = frames[1][1]
+        win.Wallpaper.ImageRectSize = Vector2.new(cellW, cellH)
+        win.Wallpaper.ImageRectOffset = Vector2.new(frames[1][2], frames[1][3])
+        win.Wallpaper.ScaleType = Enum.ScaleType.Stretch
+        media.Active = true
+        media.SetOpacity(media.Opacity, win)
+
+        if idx ~= 1 then
+            local delay = math.max(0.016666666666666666, (tonumber(metadata.delayMs) or 100) / 1000)
+            task.spawn(function()
+                local first = frames[1][1]
+                local frameIdx = 1
+                while true do
+                    if seq ~= media.Seq or not win.Wallpaper.Parent then
+                        break
+                    end
+                    task.wait(delay)
+                    if seq ~= media.Seq or not win.Wallpaper.Parent then
+                        break
+                    end
+                    frameIdx = frameIdx % idx + 1
+                    local frame = frames[frameIdx]
+                    local preload = preloadMap[frame[1]]
+                    if frame[1] ~= first and preload and not preload.IsLoaded then
+                        local timeout = os.clock() + 3
+                        while seq == media.Seq and win.Wallpaper.Parent and not preload.IsLoaded and os.clock() < timeout do
+                            task.wait(0.05)
+                        end
+                    end
+                    if seq ~= media.Seq or not win.Wallpaper.Parent then
+                        break
+                    end
+                    if frame[1] ~= first then
+                        first = frame[1]
+                        win.Wallpaper.Image = first
+                    end
+                    win.Wallpaper.ImageRectOffset = Vector2.new(frame[2], frame[3])
+                end
+            end)
+        end
+    end
+
+    function media.Apply(name, window)
+        media.Seq = media.Seq + 1
+        local win = window or ZenthraUI.Windows[1]
+        if type(name) == "table" then
+            name = name[1]
+        end
+        if type(name) ~= "string" or name == "" or name == "None" then
+            media.Stop(win)
+            return
+        end
+        if name:find("rbxassetid://") then
+            media.ShowStatic(name, win)
+            return
+        end
+        local manifestPath = getMediaFolder() .. "/" .. name .. ".json"
+        if typeof(isfile) == "function" and isfile(manifestPath) then
+            local ok, result = pcall(function()
+                return Http:JSONDecode(readfile(manifestPath))
+            end)
+            if ok and type(result) == "table" and result.count and type(result.pages) == "table" then
+                local assets = {}
+                for i, page in ipairs(result.pages) do
+                    local asset = loadAsset(page)
+                    if not asset or asset == "" then
+                        media.Stop(win)
+                        return
+                    end
+                    assets[i] = asset
+                end
+                media.PlayPages(assets, result, win)
+                return
+            end
+        end
+        local asset = loadAsset(name)
+        if not asset or asset == "" then
+            media.Stop(win)
+            return
+        end
+        media.ShowStatic(asset, win)
+    end
+
+    function media.Delete(name)
+        if type(name) ~= "string" or name == "" or name == "None" then
+            return false, "Invalid name"
+        end
+        if typeof(delfile) ~= "function" then
+            return false, "Executor does not support delfile"
+        end
+        if not (name:find("rbxassetid://") or name:find("http")) then
+            local path = getMediaFolder() .. "/" .. name
+            local ok, result = pcall(function()
+                if typeof(isfile) == "function" and not isfile(path) then
+                    error("File not found")
+                end
+                delfile(path)
+                pcall(delfile, path .. ".json")
+                local base = path:gsub("%.png$", ""):gsub("%.jpe?g$", ""):gsub("%.webm$", ""):gsub("%.mp4$", ""):gsub("%.gif$", "")
+                if base ~= path then
+                    for _, ext in ipairs({ "png", "jpg", "jpeg" }) do
+                        local i = 2
+                        while typeof(isfile) == "function" and isfile(base .. ".p" .. i .. "." .. ext) do
+                            pcall(delfile, base .. ".p" .. i .. "." .. ext)
+                            i = i + 1
+                        end
+                    end
+                end
+            end)
+            if not ok then
+                return false, tostring(result)
+            end
+            return true, name
+        end
+        return false, "Cannot delete remote/asset backgrounds"
+    end
+
+    return media
+end
+
+Internal.Media = setupMediaSystem()
+ZenthraUI.Media = Internal.Media
+
+Internal.Window.BindGameCursor = function(gui)
+    if typeof(gui) ~= "Instance" then
+        return
+    end
+    local cursorFrame = Internal.Util.New("Frame", {
+        Name = "GameCursor",
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Size = UDim2.fromScale(1, 1),
+        Active = false,
+        ZIndex = 100000,
+        Parent = gui,
+    })
+
+    local realCursor = nil
+    local clone = nil
+
+    local function findCursor()
+        if realCursor and realCursor.Parent then
+            return realCursor
+        end
+        local playerGui = LocalPlayer and LocalPlayer:FindFirstChild("PlayerGui")
+        local interface = playerGui and playerGui:FindFirstChild("Interface")
+        realCursor = interface and interface:FindFirstChild("Cursor")
+        if not realCursor and playerGui then
+            realCursor = playerGui:FindFirstChild("Cursor", true)
+        end
+        if realCursor and (not clone or not clone.Parent) then
+            if clone then
+                pcall(function() clone:Destroy() end)
+            end
+            clone = realCursor:Clone()
+            clone.Name = "Cursor"
+            clone.ZIndex = 100001
+            clone.Active = false
+            clone.Parent = cursorFrame
+        end
+        return realCursor
+    end
+
+    local function syncProperties(src, dst, useAbs)
+        if typeof(src) ~= "Instance" or typeof(dst) ~= "Instance" then
+            return
+        end
+        if src:IsA("GuiObject") and dst:IsA("GuiObject") then
+            dst.Visible = src.Visible
+            dst.AnchorPoint = src.AnchorPoint
+            dst.Rotation = src.Rotation
+            if useAbs then
+                local absPos = src.AbsolutePosition
+                local absSize = src.AbsoluteSize
+                local ap = src.AnchorPoint
+                local parent = dst.Parent
+                local parentAbs = parent and parent:IsA("GuiObject") and parent.AbsolutePosition or Vector2.zero
+                dst.Size = UDim2.fromOffset(absSize.X, absSize.Y)
+                dst.Position = UDim2.fromOffset(absPos.X + absSize.X * ap.X - parentAbs.X, absPos.Y + absSize.Y * ap.Y - parentAbs.Y)
+            else
+                dst.Size = src.Size
+                dst.Position = src.Position
+            end
+        end
+        if src:IsA("ImageLabel") and dst:IsA("ImageLabel") then
+            dst.Image = src.Image
+            dst.ImageColor3 = src.ImageColor3
+            dst.ImageTransparency = src.ImageTransparency
+            dst.ImageRectOffset = src.ImageRectOffset
+            dst.ImageRectSize = src.ImageRectSize
+            dst.ScaleType = src.ScaleType
+        end
+        if src:IsA("TextLabel") and dst:IsA("TextLabel") then
+            dst.Text = src.Text
+            dst.TextColor3 = src.TextColor3
+            dst.TextTransparency = src.TextTransparency
+            dst.TextStrokeTransparency = src.TextStrokeTransparency
+            dst.TextSize = src.TextSize
+        end
+        for _, child in ipairs(src:GetChildren()) do
+            local match = dst:FindFirstChild(child.Name)
+            if match then
+                syncProperties(child, match, false)
+            end
+        end
+    end
+
+    Internal.Util.Connect(Run.RenderStepped, function()
+        local cursor = findCursor()
+        if cursor and clone then
+            syncProperties(cursor, clone, true)
+        elseif clone then
+            clone.Visible = false
+        end
+    end)
+end
+
+Internal.Window.Open = function(config)
+    local cfg = config or {}
+
+    if cfg.ConfigFolder ~= false then
+        Internal.Config.Setup(cfg.ConfigFolder or "Zenthra", cfg.ConfigName or "config")
+        Internal.State.Saved = Internal.Config.Load()
+        if type(Internal.State.Saved) == "table" then
+            for k, v in pairs(Internal.State.Saved) do
+                ZenthraUI.Flags[k] = v
+            end
+        end
+        if type(Internal.State.Saved.zenthra_notify_position) == "string" then
+            Internal.Notify.SetPosition(Internal.State.Saved.zenthra_notify_position)
+        end
+    end
+
+    local window = {
+        Tabs = {},
+        ActiveTab = nil,
+        Open = true,
+        ToggleKey = cfg.ToggleKey or Enum.KeyCode.RightShift,
+    }
+
+    if cfg.Accent then
+        ZenthraUI:SetAccent(cfg.Accent)
+    end
+    if cfg.Theme then
+        ZenthraUI:SetTheme(cfg.Theme)
+    end
+
+    local screenGui = Env.Adopt(Internal.Util.New("ScreenGui", {
+        Name = Env.RandomName(),
+        ResetOnSpawn = false,
+        IgnoreGuiInset = true,
+        AutoLocalize = false,
+        DisplayOrder = Env.GuiDisplayOrder,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Parent = Env.PlayerGuiParent(),
+    }))
+
+    pcall(function()
+        screenGui.Modal = false
+    end)
+
+    Env.PromoteGui(screenGui, Env.GuiDisplayOrder)
+
+    pcall(function()
+        screenGui:GetPropertyChangedSignal("DisplayOrder"):Connect(function()
+            if screenGui.DisplayOrder < Env.GuiDisplayOrder then
+                screenGui.DisplayOrder = Env.GuiDisplayOrder
+            end
+        end)
+    end)
+
+    window.Screen = screenGui
+    Internal.Window.BindGameCursor(screenGui)
+
+    local notifyGui = Env.Adopt(Internal.Util.New("ScreenGui", {
+        Name = Env.RandomName(),
+        ResetOnSpawn = false,
+        IgnoreGuiInset = true,
+        AutoLocalize = false,
+        DisplayOrder = Env.NotifyDisplayOrder,
+        ZIndexBehavior = Enum.ZIndexBehavior.Sibling,
+        Parent = Env.PlayerGuiParent(),
+    }))
+    Env.PromoteGui(notifyGui, Env.NotifyDisplayOrder)
+    Internal.Env.NotifyGui = notifyGui
+
+    local notifyContainer = Internal.Util.New("Frame", {
+        Name = "Container",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        Parent = notifyGui,
+    })
+    Internal.Util.New("UIScale", { Scale = 1, Parent = notifyContainer })
+
+    local layer = Internal.Util.New("Frame", {
+        Name = "Layer",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        Active = false,
+        Parent = screenGui,
+    })
+
+    local uiScale = Internal.Util.New("UIScale", { Scale = 1, Parent = layer })
+    window.Scale = uiScale
+
+    local function updateScale()
+        local viewport = workspace.CurrentCamera and workspace.CurrentCamera.ViewportSize or Vector2.new(1280, 720)
+        local mobilePad = Env.Mobile and 30 or 90
+        uiScale.Scale = math.clamp(math.min(viewport.X / (Internal.Layout.Width + mobilePad), viewport.Y / (Internal.Layout.Height + mobilePad)), 0.5, 1)
+        local notifyScale = notifyContainer:FindFirstChildOfClass("UIScale")
+        if notifyScale then
+            notifyScale.Scale = uiScale.Scale
+        end
+    end
+    updateScale()
+    if workspace.CurrentCamera then
+        Internal.Util.Connect(workspace.CurrentCamera:GetPropertyChangedSignal("ViewportSize"), updateScale)
+    end
+
+    local holder = Internal.Util.New("Frame", {
+        Name = "Holder",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.fromOffset(Internal.Layout.Width, Internal.Layout.Height),
+        BackgroundTransparency = 1,
+        Visible = false,
+        Parent = layer,
+    }, { Internal.Util.New("UIScale", { Scale = 0.94 }) })
+
+    window.Holder = holder
+    window.RootScale = holder:FindFirstChildOfClass("UIScale")
+
+    local shadow = Internal.Util.New("ImageLabel", {
+        Name = "Shadow",
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        Size = UDim2.new(1, 97, 1, 97),
+        BackgroundTransparency = 1,
+        Image = "rbxassetid://17290899982",
+        ImageColor3 = Color3.new(0, 0, 0),
+        ImageTransparency = 1,
+        Parent = holder,
+    })
+
+    local root = Internal.Util.New("CanvasGroup", {
+        Name = "Root",
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 0,
+        BorderSizePixel = 0,
+        GroupTransparency = 1,
+        Parent = holder,
+    }, { Internal.Util.Corner(13), Internal.Util.Stroke("Border", 1.2, 0.35) })
+    Internal.Theme.Bind(root, "BackgroundColor3", "Background")
+    window.Root = root
+
+    local bgCanvas = Internal.Util.New("CanvasGroup", {
+        Name = "VLBackground",
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        GroupTransparency = 0,
+        Visible = false,
+        ZIndex = 0,
+        Parent = root,
+    }, { Internal.Util.Corner(13) })
+    window.BgCanvas = bgCanvas
+
+    window.BgVideo = Internal.Util.New("VideoFrame", {
+        Name = "Video",
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Visible = false,
+        Looped = true,
+        Volume = 0,
+        ZIndex = 1,
+        Parent = bgCanvas,
+    })
+
+    window.Wallpaper = Internal.Util.New("ImageLabel", {
+        Name = "Image",
+        Size = UDim2.fromScale(1, 1),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Image = "",
+        ImageTransparency = 1,
+        ScaleType = Enum.ScaleType.Stretch,
+        Visible = true,
+        ZIndex = 2,
+        Parent = bgCanvas,
+    })
+
+    Internal.Theme.Bind(Internal.Util.New("Frame", {
+        Name = "TopGlow",
+        Size = UDim2.new(1, 0, 0, 74),
+        BackgroundTransparency = 0.94,
+        BorderSizePixel = 0,
+        ZIndex = 3,
+        Parent = root,
+    }, { Internal.Util.Gradient(nil, Internal.Util.Fade(0, 0.45, 1, 1), 90) }), "BackgroundColor3", "Accent")
+
+    local topbar = Internal.Util.New("Frame", {
+        Name = "Topbar",
+        Size = UDim2.new(1, 0, 0, Internal.Layout.TopbarH),
+        BackgroundTransparency = 1,
+        Active = true,
+        ZIndex = 4,
+        Parent = root,
+    })
+
+    local titleContainer = Internal.Util.New("Frame", {
+        Position = UDim2.new(0, 18, 0.5, 0),
+        AnchorPoint = Vector2.new(0, 0.5),
+        Size = UDim2.fromOffset(0, 18),
+        AutomaticSize = Enum.AutomaticSize.X,
+        BackgroundTransparency = 1,
+        Parent = topbar,
+    }, {
+        Internal.Util.New("UIListLayout", {
+            Padding = UDim.new(0, 7),
+            FillDirection = Enum.FillDirection.Horizontal,
+            VerticalAlignment = Enum.VerticalAlignment.Center,
+            SortOrder = Enum.SortOrder.LayoutOrder,
+        }),
+    })
+
+    local titleLabel = Internal.Util.Label({
+        Text = cfg.Title or "Zenthra",
+        TextSize = 14,
+        Weight = Internal.Layout.Weight.Bold,
+        AutomaticSize = Enum.AutomaticSize.X,
+        Size = UDim2.fromOffset(0, 16),
+        LayoutOrder = 1,
+        Parent = titleContainer,
+    })
+
+    local subtitleLabel
+    if cfg.Subtitle then
+        subtitleLabel = Internal.Util.Label({
+            Text = cfg.Subtitle,
+            TextSize = 11,
+            ColorKey = "Muted",
+            AutomaticSize = Enum.AutomaticSize.X,
+            Size = UDim2.fromOffset(0, 14),
+            LayoutOrder = 2,
+            Parent = titleContainer,
+        })
+    end
+
+    local closeButton = Internal.Util.New("TextButton", {
+        Text = "",
+        AutoButtonColor = false,
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -18, 0.5, 0),
+        Size = UDim2.fromOffset(26, 26),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        Parent = topbar,
+    }, { Internal.Util.Corner(7) })
+    Internal.Theme.Bind(closeButton, "BackgroundColor3", "Surface")
+
+    local closeIcon = Internal.Util.Image({
+        Image = "close",
+        Size = UDim2.fromOffset(13, 13),
+        AnchorPoint = Vector2.new(0.5, 0.5),
+        Position = UDim2.fromScale(0.5, 0.5),
+        ImageTransparency = 0.25,
+        ColorKey = "SubText",
+        Parent = closeButton,
+    })
+
+    Internal.Util.Hover(closeButton, function()
+        Internal.Util.Tween(closeButton, { BackgroundTransparency = 0.25 }, 0.16)
+        Internal.Util.Tween(closeIcon, { ImageColor3 = palette.Text, ImageTransparency = 0 }, 0.16)
+    end, function()
+        Internal.Util.Tween(closeButton, { BackgroundTransparency = 1 }, 0.2)
+        Internal.Util.Tween(closeIcon, { ImageColor3 = palette.SubText, ImageTransparency = 0.25 }, 0.2)
+    end)
+
+    local searchBar = Internal.Util.New("Frame", {
+        AnchorPoint = Vector2.new(1, 0.5),
+        Position = UDim2.new(1, -48, 0.5, 0),
+        Size = UDim2.fromOffset(150, 27),
+        BackgroundTransparency = 0.45,
+        BorderSizePixel = 0,
+        ClipsDescendants = true,
+        Parent = topbar,
+    }, { Internal.Util.Corner(7), Internal.Util.Stroke("BorderSoft", 1, 0.25) })
+    Internal.Theme.Bind(searchBar, "BackgroundColor3", "Surface")
+
+    Internal.Util.Image({
+        Image = "search",
+        Size = UDim2.fromOffset(12, 12),
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, 9, 0.5, 0),
+        ImageTransparency = 0.2,
+        ColorKey = "Muted",
+        Parent = searchBar,
+    })
+
+    local searchBox = Internal.Util.New("TextBox", {
+        Text = "",
+        PlaceholderText = "Search",
+        ClearTextOnFocus = false,
+        BackgroundTransparency = 1,
+        ClipsDescendants = true,
+        TextWrapped = false,
+        TextTruncate = Enum.TextTruncate.AtEnd,
+        FontFace = Internal.Util.Font(Internal.Layout.Weight.Medium),
+        TextSize = 11.5,
+        TextXAlignment = Enum.TextXAlignment.Left,
+        Position = UDim2.new(0, 28, 0, 0),
+        Size = UDim2.new(1, -34, 1, 0),
+        Parent = searchBar,
+    })
+    Internal.Theme.Bind(searchBox, "TextColor3", "Text")
+    Internal.Theme.Bind(searchBox, "PlaceholderColor3", "Muted")
+    window.SearchBox = searchBox
+
+    Internal.Theme.Bind(Internal.Util.New("Frame", {
+        Position = UDim2.new(0, 0, 0, Internal.Layout.TopbarH),
+        Size = UDim2.new(1, 0, 0, 1),
+        BackgroundTransparency = 0.55,
+        BorderSizePixel = 0,
+        ZIndex = 4,
+        Parent = root,
+    }), "BackgroundColor3", "Border")
+
+    local sidebar = Internal.Util.New("Frame", {
+        Name = "Sidebar",
+        Position = UDim2.new(0, 0, 0, Internal.Layout.TopbarH + 1),
+        Size = UDim2.new(0, Internal.Layout.SidebarW, 1, -(Internal.Layout.TopbarH + 1)),
+        BackgroundTransparency = 0.35,
+        BorderSizePixel = 0,
+        ZIndex = 4,
+        Parent = root,
+    }, { Internal.Util.Gradient(nil, Internal.Util.Fade(0.1, 0.5, 0.7), 90) })
+    Internal.Theme.Bind(sidebar, "BackgroundColor3", "Surface")
+    window.Sidebar = sidebar
+
+    Internal.Theme.Bind(Internal.Util.New("Frame", {
+        AnchorPoint = Vector2.new(1, 0),
+        Position = UDim2.new(1, 0, 0, 0),
+        Size = UDim2.new(0, 1, 1, 0),
+        BackgroundTransparency = 0.5,
+        BorderSizePixel = 0,
+        Parent = sidebar,
+    }), "BackgroundColor3", "Border")
+
+    local tabScroller = Internal.Util.New("ScrollingFrame", {
+        Position = UDim2.new(0, 12, 0, 12),
+        Size = UDim2.new(1, -24, 1, -24),
+        BackgroundTransparency = 1,
+        BorderSizePixel = 0,
+        ScrollBarThickness = 0,
+        AutomaticCanvasSize = Enum.AutomaticSize.Y,
+        CanvasSize = UDim2.new(),
+        ScrollingDirection = Enum.ScrollingDirection.Y,
+        Parent = sidebar,
+    })
+
+    local indicator = Internal.Util.New("Frame", {
+        Name = "Indicator",
+        Size = UDim2.new(1, -(Internal.Layout.TabPad * 2), 0, Internal.Layout.TabH),
+        BackgroundTransparency = 0.5,
+        BorderSizePixel = 0,
+        Visible = false,
+        ZIndex = 1,
+        Parent = tabScroller,
+    }, {
+        Internal.Util.Corner(7),
+        Internal.Util.Gradient(nil, Internal.Util.Fade(0.45, 0.55, 1), 0),
+    })
+    Internal.Theme.Bind(indicator, "BackgroundColor3", "Accent")
+    window.Indicator = indicator
+    window.TabIndicatorTween = nil
+
+    Internal.Theme.Bind(Internal.Util.New("Frame", {
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, 0, 0.5, 0),
+        Size = UDim2.fromOffset(2, 16),
+        BorderSizePixel = 0,
+        Parent = indicator,
+    }, { Internal.Util.Corner(2) }), "BackgroundColor3", "Accent")
+
+    window.TabHolder = Internal.Util.New("Frame", {
+        Size = UDim2.new(1, 0, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 1,
+        ZIndex = 2,
+        Parent = tabScroller,
+    }, { Internal.Util.List(Internal.Layout.TabGap), Internal.Util.Padding(Internal.Layout.TabPad, 0, Internal.Layout.TabPad, Internal.Layout.TabPad) })
+
+    local contentArea = Internal.Util.New("Frame", {
+        Name = "Content",
+        Position = UDim2.new(0, Internal.Layout.SidebarW + 1, 0, Internal.Layout.TopbarH + 1),
+        Size = UDim2.new(1, -(Internal.Layout.SidebarW + 1), 1, -(Internal.Layout.TopbarH + 1)),
+        BackgroundTransparency = 1,
+        ZIndex = 4,
+        Parent = root,
+    })
+    window.Content = contentArea
+
+    local searchPage, searchScroller, searchLeft, searchRight = Internal.Page.Create(contentArea)
+    local noResults = Internal.Util.Label({
+        Text = "No modules found",
+        TextSize = 12,
+        ColorKey = "Muted",
+        TextXAlignment = Enum.TextXAlignment.Center,
+        Position = UDim2.fromScale(0, 0.32),
+        Size = UDim2.new(1, 0, 0, 16),
+        Visible = false,
+        Parent = searchPage,
+    })
+
+    local isSearching = false
+    Internal.Util.Connect(searchBox:GetPropertyChangedSignal("Text"), function()
+        local query = searchBox.Text:lower():gsub("^%s+", ""):gsub("%s+$", "")
+        local hasQuery = query ~= ""
+        local order = 0
+
+        for _, tab in ipairs(window.Tabs) do
+            for _, mod in ipairs(tab.Modules) do
+                local match = hasQuery and mod.Keyword:find(query, 1, true) ~= nil
+                local col = mod.Column
+                if match then
+                    order = order + 1
+                    mod.Frame.LayoutOrder = order
+                    col = order % 2 == 1 and searchLeft or searchRight
+                else
+                    mod.Frame.LayoutOrder = mod.LayoutOrder
+                end
+                if mod.Frame.Parent ~= col then
+                    mod.Frame.Parent = col
+                end
+            end
+        end
+
+        noResults.Visible = hasQuery and order == 0
+        if hasQuery == isSearching then
+            return
+        end
+        isSearching = hasQuery
+
+        if hasQuery then
+            if window.ActiveTab then
+                window.ActiveTab.Page.Visible = false
+            end
+            searchPage.Visible = true
+            searchPage.GroupTransparency = 1
+            Internal.Util.Tween(searchPage, { GroupTransparency = 0 }, 0.28)
+        else
+            searchPage.Visible = false
+            if window.ActiveTab then
+                window.ActiveTab.Page.Visible = true
+                window.ActiveTab.Page.GroupTransparency = 0
+            end
+        end
+    end)
+
+    local minimized = false
+
+    local function isHideOnMin()
+        return ZenthraUI.Flags.zenthra_hide_minimized == true
+    end
+
+    local function isCompactMode()
+        return ZenthraUI.Flags.zenthra_compact_minimized == true
+    end
+
+    local function getTitleWidth()
+        return math.clamp(math.floor(titleLabel.AbsoluteSize.X / math.max(uiScale.Scale * (window.RootScale and window.RootScale.Scale or 1), 0.01) + 40), 110, Internal.Layout.Width)
+    end
+
+    local function getMinSize()
+        if not minimized then
+            return UDim2.fromOffset(Internal.Layout.Width, Internal.Layout.Height)
+        end
+        return UDim2.fromOffset(isCompactMode() and getTitleWidth() or Internal.Layout.Width, Internal.Layout.TopbarH)
+    end
+
+    local function getShadowSize()
+        return UDim2.new(1, 97, 1, 111)
+    end
+
+    local function updateMinimizedUI()
+        local compact = minimized and isCompactMode()
+        local visible = not compact
+        searchBar.Visible = visible
+        closeButton.Visible = visible
+        if subtitleLabel then
+            subtitleLabel.Visible = not compact
+        end
+        titleContainer.AnchorPoint = compact and Vector2.new(0.5, 0.5) or Vector2.new(0, 0.5)
+        titleContainer.Position = compact and UDim2.fromScale(0.5, 0.5) or UDim2.new(0, 18, 0.5, 0)
+    end
+
+    local mouseConn
+    local function isInFirstPerson()
+        local lp = LocalPlayer
+        if lp and lp.CameraMode == Enum.CameraMode.LockFirstPerson then
+            return true
+        end
+        local cam = workspace.CurrentCamera
+        if not cam then
+            return false
+        end
+        return (cam.CFrame.Position - cam.Focus.Position).Magnitude < 2.25
+    end
+
+    local function updateMouseBehavior()
+        if window.Open == true and holder.Visible and not minimized then
+            if mouseConn then
+                return
+            end
+            mouseConn = Run.RenderStepped:Connect(function()
+                local rmb = UserInput:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+                local alt = UserInput:IsKeyDown(Enum.KeyCode.LeftAlt) or UserInput:IsKeyDown(Enum.KeyCode.RightAlt)
+                if isInFirstPerson() then
+                    UserInput.MouseBehavior = alt and Enum.MouseBehavior.Default or Enum.MouseBehavior.LockCenter
+                    return
+                end
+                if rmb then
+                    UserInput.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
+                    return
+                end
+                UserInput.MouseBehavior = Enum.MouseBehavior.Default
+            end)
+        elseif mouseConn then
+            mouseConn:Disconnect()
+            mouseConn = nil
+        end
+    end
+
+    local function setMinimized(state)
+        minimized = state
+        updateMinimizedUI()
+        Internal.Util.Tween(holder, { Size = getMinSize() }, 0.4)
+        Internal.Util.Tween(shadow, { ImageTransparency = state and 1 or 0.45 }, state and 0.22 or 0.5)
+        updateMouseBehavior()
+    end
+
+    window.CompactPillActive = function()
+        return minimized and isCompactMode()
+    end
+
+    window.RefreshMinimized = function()
+        if not minimized then
+            return
+        end
+        updateMinimizedUI()
+        Internal.Util.Tween(holder, { Size = getMinSize() }, 0.3)
+    end
+
+    window.Toggle = function()
+        if isHideOnMin() then
+            if window.Open and holder.Visible then
+                window:SetVisible(false)
+            else
+                minimized = false
+                window:SetVisible(true)
+            end
+            return
+        end
+        if not window.Open or not holder.Visible then
+            minimized = false
+            window:SetVisible(true)
+            return
+        end
+        setMinimized(not minimized)
+    end
+
+    Internal.Util.Connect(closeButton.MouseButton1Click, function()
+        window:Toggle()
+    end)
+
+    local openTween, closeTween, shadowTween
+
+    window.SetVisible = function(_, visible)
+        local state = visible == true
+        window.Open = state
+
+        if openTween then
+            openTween:Cancel()
+            openTween = nil
+        end
+        if closeTween then
+            closeTween:Cancel()
+            closeTween = nil
+        end
+        if shadowTween then
+            shadowTween:Cancel()
+            shadowTween = nil
+        end
+
+        if state then
+            if minimized then
+                minimized = false
+                updateMinimizedUI()
+            end
+            holder.Visible = true
+            shadow.Visible = true
+            holder.Size = getMinSize()
+            shadow.Size = getShadowSize()
+            window.RootScale.Scale = 0.78
+            root.GroupTransparency = 1
+            shadow.ImageTransparency = 1
+            shadowTween = Internal.Util.Tween(window.RootScale, { Scale = 0.94 }, 0.36)
+            openTween = Internal.Util.Tween(root, { GroupTransparency = 0 }, 0.28)
+            shadowTween = Internal.Util.Tween(shadow, { ImageTransparency = 0.45 }, 0.32)
+        else
+            shadowTween = Internal.Util.Tween(window.RootScale, { Scale = 0.86 }, 0.22, Internal.Layout.Ease, Internal.Layout.EaseIn)
+            openTween = Internal.Util.Tween(root, { GroupTransparency = 1 }, 0.2, Internal.Layout.Ease, Internal.Layout.EaseIn)
+            shadowTween = Internal.Util.Tween(shadow, { ImageTransparency = 1 }, 0.2, Internal.Layout.Ease, Internal.Layout.EaseIn)
+            task.delay(0.22, function()
+                if not window.Open then
+                    holder.Visible = false
+                    shadow.Visible = false
+                    window.RootScale.Scale = 0.94
+                    updateMouseBehavior()
+                end
+            end)
+        end
+        updateMouseBehavior()
+    end
+
+    window.Destroy = function()
+        if mouseConn then
+            mouseConn:Disconnect()
+            mouseConn = nil
+        end
+        Internal.Config.Save()
+        for _, conn in ipairs(Internal.State.Connections) do
+            pcall(function()
+                conn:Disconnect()
+            end)
+        end
+        table.clear(Internal.State.Connections)
+        table.clear(ZenthraUI.Options)
+        for i, win in ipairs(ZenthraUI.Windows) do
+            if win == window then
+                table.remove(ZenthraUI.Windows, i)
+                break
+            end
+        end
+        Internal.Util.Tween(root, { GroupTransparency = 1 }, 0.2)
+        Internal.Util.Tween(window.RootScale, { Scale = 0.9 }, 0.2)
+        task.delay(0.24, function()
+            screenGui:Destroy()
+            notifyGui:Destroy()
+        end)
+    end
+
+    window.Tab = function(_, tabConfig)
+        return Internal.Tab.Create(window, tabConfig or {})
+    end
+
+    window.Notify = function(...)
+        return ZenthraUI:Notify(select(2, ...))
+    end
+
+    Internal.Util.Connect(UserInput.InputBegan, function(input, gameProcessed)
+        if gameProcessed or Internal.Binds.Binding then
+            return
+        end
+        if input.KeyCode == window.ToggleKey then
+            window:Toggle()
+        end
+    end)
+
+    if Env.Mobile then
+        local floatBtn = Internal.Util.New("TextButton", {
+            Name = "FloatToggle",
+            Text = "",
+            AutoButtonColor = false,
+            AnchorPoint = Vector2.new(0, 0.5),
+            Position = UDim2.new(0, 16, 0.28, 0),
+            Size = UDim2.fromOffset(46, 46),
+            BackgroundTransparency = 0.05,
+            BorderSizePixel = 0,
+            Parent = screenGui,
+        }, { Internal.Util.Corner(UDim.new(1, 0)), Internal.Util.Stroke("Border", 1, 0.3) })
+        Internal.Theme.Bind(floatBtn, "BackgroundColor3", "Surface")
+
+        Internal.Util.Image({
+            Image = cfg.Icon or "rbxassetid://6035047391",
+            Size = UDim2.fromOffset(20, 20),
+            AnchorPoint = Vector2.new(0.5, 0.5),
+            Position = UDim2.fromScale(0.5, 0.5),
+            ColorKey = "Accent",
+            Parent = floatBtn,
+        })
+
+        local dragging = false
+        local dragStart = nil
+        local startUDim = nil
+        local moved = false
+
+        Internal.Util.Connect(floatBtn.InputBegan, function(input)
+            if input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+            dragging = true
+            moved = false
+            dragStart = input.Position
+            startUDim = floatBtn.Position
+        end)
+
+        Internal.Util.Connect(UserInput.InputChanged, function(input)
+            if not dragging or input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+            local delta = input.Position - dragStart
+            if delta.Magnitude > 6 then
+                moved = true
+            end
+            floatBtn.Position = UDim2.new(startUDim.X.Scale, startUDim.X.Offset + delta.X, startUDim.Y.Scale, startUDim.Y.Offset + delta.Y)
+        end)
+
+        Internal.Util.Connect(UserInput.InputEnded, function(input)
+            if not dragging or input.UserInputType ~= Enum.UserInputType.Touch then
+                return
+            end
+            dragging = false
+            if not moved then
+                window:Toggle()
+            end
+        end)
+    end
+
+    local keybindList = Internal.Util.New("CanvasGroup", {
+        Name = "KeybindList",
+        AnchorPoint = Vector2.new(0, 0.5),
+        Position = UDim2.new(0, -194, 0.5, 0),
+        Size = UDim2.new(0, 180, 0, 0),
+        AutomaticSize = Enum.AutomaticSize.Y,
+        BackgroundTransparency = 0.02,
+        GroupTransparency = 1,
+        BorderSizePixel = 0,
+        Visible = false,
+        Parent = layer,
+    }, {
+        Internal.Util.Corner(10),
+        Internal.Util.Stroke("Border", 1, 0.32),
+        Internal.Util.Padding(10, 10, 12, 12),
+        Internal.Util.List(5),
+    })
+    Internal.Theme.Bind(keybindList, "BackgroundColor3", "Surface")
+
+    Internal.Util.Label({
+        Text = "Keybinds",
+        TextSize = 10,
+        Weight = Internal.Layout.Weight.Bold,
+        ColorKey = "Muted",
+        Size = UDim2.new(1, 0, 0, 12),
+        LayoutOrder = 0,
+        Parent = keybindList,
+    })
+
+    local emptyLabel = Internal.Util.Label({
+        Text = "Nothing bound yet",
+        TextSize = 11,
+        ColorKey = "SubText",
+        Size = UDim2.new(1, 0, 0, 16),
+        LayoutOrder = 1,
+        Parent = keybindList,
+    })
+
+    local keybindEntries = {}
+    local keybindListVisible = false
+
+    local function rebuildKeybindList()
+        for _, entry in ipairs(keybindEntries) do
+            entry:Destroy()
+        end
+        table.clear(keybindEntries)
+        local count = 0
+
+        for _, bind in ipairs(ZenthraUI.Binds) do
+            if bind.Key then
+                count = count + 1
+                local row = Internal.Util.New("Frame", {
+                    Size = UDim2.new(1, 0, 0, 18),
+                    BackgroundTransparency = 1,
+                    LayoutOrder = count + 1,
+                    Parent = keybindList,
+                }, { Internal.Util.FlexRow(5) })
+
+                Internal.Util.Label({
+                    Text = bind.Label,
+                    TextSize = 11.5,
+                    ColorKey = "Text",
+                    TextTruncate = Enum.TextTruncate.AtEnd,
+                    Size = UDim2.new(0, 0, 1, 0),
+                    LayoutOrder = 1,
+                    Parent = row,
+                }, { Internal.Util.Grow() })
+
+                local chip = Internal.Util.New("Frame", {
+                    Size = UDim2.fromOffset(0, 16),
+                    AutomaticSize = Enum.AutomaticSize.X,
+                    BackgroundTransparency = 0.4,
+                    BorderSizePixel = 0,
+                    LayoutOrder = 2,
+                    Parent = row,
+                }, {
+                    Internal.Util.Corner(5),
+                    Internal.Util.Stroke("Border", 1, 0.25),
+                    Internal.Util.Padding(0, 0, 5, 6),
+                })
+                Internal.Theme.Bind(chip, "BackgroundColor3", "SurfaceAlt")
+
+                Internal.Util.Label({
+                    Text = Internal.Util.KeyName(bind.Key),
+                    TextSize = 10,
+                    Weight = Internal.Layout.Weight.SemiBold,
+                    TextXAlignment = Enum.TextXAlignment.Center,
+                    AutomaticSize = Enum.AutomaticSize.X,
+                    Size = UDim2.fromOffset(0, 16),
+                    Parent = chip,
+                })
+
+                table.insert(keybindEntries, row)
+            end
+        end
+        emptyLabel.Visible = count == 0
+    end
+
+    local function setKeybindListVisible(state)
+        keybindListVisible = state
+        if state then
+            rebuildKeybindList()
+            keybindList.Visible = true
+            Internal.Util.Tween(keybindList, { Position = UDim2.new(0, 12, 0.5, 0), GroupTransparency = 0 }, 0.34)
+        else
+            Internal.Util.Tween(keybindList, { Position = UDim2.new(0, -194, 0.5, 0), GroupTransparency = 1 }, 0.28, Internal.Layout.Ease, Internal.Layout.EaseIn)
+            task.delay(0.3, function()
+                if not keybindListVisible then
+                    keybindList.Visible = false
+                end
+            end)
+        end
+    end
+
+    ZenthraUI:OnBindsChanged(function()
+        if keybindListVisible then
+            rebuildKeybindList()
+        end
+    end)
+
+    local guiTab = Internal.Tab.Create(window, { Title = "Interface", Icon = "settings", Internal = true })
+    window.GuiTab = guiTab
+
+    local interfaceMod = guiTab:Module({ Title = "Interface", Description = "Window behavior", Side = "Left", Toggleable = false })
+
+    interfaceMod:Toggle({
+        Title = "Hide on minimized",
+        Flag = "zenthra_hide_minimized",
+        Default = false,
+        Keybind = false,
+        Callback = function(state)
+            if state and minimized then
+                setMinimized(false)
+            end
+        end,
+    })
+
+    interfaceMod:Toggle({
+        Title = "Start minimized",
+        Flag = "zenthra_start_minimized",
+        Default = false,
+        Keybind = false,
+    })
+
+    interfaceMod:Toggle({
+        Title = "Compact when minimized",
+        Flag = "zenthra_compact_minimized",
+        Default = false,
+        Keybind = false,
+        Callback = function()
+            window:RefreshMinimized()
+        end,
+    })
+
+    interfaceMod:Toggle({
+        Title = "Show Keybind List",
+        Flag = "zenthra_keybind_list",
+        Default = false,
+        Keybind = false,
+        Callback = setKeybindListVisible,
+    })
+
+    local toggleKeybind = interfaceMod:Keybind({
+        Title = "Toggle key",
+        Flag = "zenthra_toggle_key",
+        Default = window.ToggleKey,
+        Changed = function(key)
+            window.ToggleKey = key
+        end,
+    })
+    if toggleKeybind.Value then
+        window.ToggleKey = toggleKeybind.Value
+    end
+
+    local notifyMod = guiTab:Module({ Title = "Notifications", Description = "Toast positioning", Side = "Right", Toggleable = false })
+
+    notifyMod:Dropdown({
+        Title = "Position",
+        Flag = "zenthra_notify_position",
+        Options = ZenthraUI.NotifyPositions,
+        Default = Internal.Notify.GetPosition(),
+        Callback = function(pos)
+            Internal.Notify.SetPosition(pos)
+        end,
+    })
+
+    notifyMod:Button({
+        Title = "Preview (Title/Text)",
+        Callback = function()
+            ZenthraUI:Notify({ Title = "Zenthra", Text = "Sample notification in the selected corner.", Type = "info" })
+        end,
+    })
+
+    notifyMod:Button({
+        Title = "Preview (Content)",
+        Callback = function()
+            ZenthraUI:Notify({ Title = "Zenthra", Content = "Same toast using Content instead of Text.", Type = "info" })
+        end,
+    })
+
+    pcall(function()
+        window.ModuleTransparency = tonumber(Internal.State.Saved.gui_module_transparency) or 0
+
+        local function applyModuleTransparency(val)
+            local t = math.clamp(tonumber(val) or 0, 0, 1)
+            window.ModuleTransparency = t
+            local bgT = 0.15 + 0.85 * t
+            for _, tab in ipairs(window.Tabs) do
+                for _, mod in ipairs(tab.Modules) do
+                    if mod.Frame and mod.Frame.Parent then
+                        mod.Frame.BackgroundTransparency = bgT
+                    end
+                end
+            end
+            if window.Sidebar then
+                window.Sidebar.BackgroundTransparency = 0.35 + 0.65 * t
+            end
+        end
+
+        window.ApplyModuleTransparency = applyModuleTransparency
+
+        local pickers = {
+            { Title = "Main color", Flag = "gui_theme_background", Key = "Background" },
+            { Title = "Secondary", Flag = "gui_theme_surface", Key = "Surface" },
+            { Title = "Accent", Flag = "gui_theme_accent", Key = "Accent" },
+            { Title = "Stroke", Flag = "gui_theme_border", Key = "Border" },
+            { Title = "Text", Flag = "gui_theme_text", Key = "Text" },
+            { Title = "Subtext", Flag = "gui_theme_subtext", Key = "SubText" },
+        }
+
+        local appearanceMod = guiTab:Module({ Title = "Appearance", Description = "Live theme customization", Side = "Right", Toggleable = false })
+        local pickerRefs = {}
+
+        for _, p in ipairs(pickers) do
+            pickerRefs[p.Key] = appearanceMod:Colorpicker({
+                Title = p.Title,
+                Flag = p.Flag,
+                Default = palette[p.Key] or Color3.fromRGB(255, 255, 255),
+                Callback = function(color)
+                    pcall(Internal.Theme.Set, { [p.Key] = color })
+                end,
+            })
+        end
+
+        local transparencySlider = appearanceMod:Slider({
+            Title = "Module transparency",
+            Flag = "gui_module_transparency",
+            Min = 0,
+            Max = 1,
+            Decimals = 2,
+            Default = 0,
+            Callback = applyModuleTransparency,
+        })
+
+        appearanceMod:Button({
+            Title = "Reset Theme",
+            Callback = function()
+                pcall(Internal.Theme.Reset)
+                for _, p in ipairs(pickers) do
+                    local ref = pickerRefs[p.Key]
+                    local def = palette[p.Key]
+                    if ref and ref.Set and def then
+                        pcall(ref.Set, ref, def, true)
+                    end
+                end
+                if transparencySlider and transparencySlider.Set then
+                    pcall(transparencySlider.Set, transparencySlider, 0)
+                else
+                    applyModuleTransparency(0)
+                end
+            end,
+        })
+
+        task.defer(function()
+            applyModuleTransparency(ZenthraUI.Flags.gui_module_transparency)
+        end)
+
+        local mediaSys = ZenthraUI.Media
+
+        if mediaSys then
+            local function applyBg(name)
+                mediaSys.Apply(name or ZenthraUI.Flags.gui_background_image, window)
+            end
+
+            local bgMod = guiTab:Module({
+                Title = "Background",
+                Description = "Image, GIF or video via API",
+                Side = "Left",
+                Toggleable = false,
+            })
+
+            local bgDropdown = bgMod:Dropdown({
+                Title = "Background",
+                Flag = "gui_background_image",
+                Options = mediaSys.List(),
+                Default = ZenthraUI.Flags.gui_background_image or "None",
+                MaxVisible = 5,
+                Callback = function(name)
+                    if type(name) == "table" then
+                        name = name[1]
+                    end
+                    applyBg(name)
+                end,
+            })
+
+            bgMod:Slider({
+                Title = "Opacity",
+                Flag = "gui_bg_image_opacity",
+                Min = 0,
+                Max = 1,
+                Default = tonumber(ZenthraUI.Flags.gui_bg_image_opacity) or 0.45,
+                Decimals = 2,
+                Callback = function(opacity)
+                    mediaSys.SetOpacity(opacity, window)
+                end,
+            })
+
+            bgMod:Input({ Title = "Media URL", Flag = "gui_bg_url", Placeholder = "https://... or rbxassetid://" })
+            bgMod:Input({ Title = "Save as", Flag = "gui_bg_save_name", Placeholder = "Name for the file" })
+
+            bgMod:Button({
+                Title = "Download and use",
+                Callback = function()
+                    local url = ZenthraUI.Flags.gui_bg_url
+                    if type(url) ~= "string" or url == "" then
+                        ZenthraUI:Notify({ Title = "Background", Content = "Paste a URL first", Type = "error", Duration = 3 })
+                        return
+                    end
+                    local cleanUrl = url:gsub("^%s+", ""):gsub("%s+$", "")
+                    if cleanUrl:match("^%d+$") then
+                        cleanUrl = "rbxassetid://" .. cleanUrl
+                    end
+                    if cleanUrl:find("rbxassetid://", 1, true) then
+                        ZenthraUI.Flags.gui_background_image = cleanUrl
+                        pcall(Internal.Config.Save)
+                        applyBg(cleanUrl)
+                        if bgDropdown and bgDropdown.Set then
+                            pcall(bgDropdown.Set, bgDropdown, cleanUrl)
+                        end
+                        ZenthraUI:Notify({ Title = "Background", Content = "Applied", Type = "success", Duration = 2 })
+                        return
+                    end
+                    ZenthraUI:Notify({ Title = "Background", Content = "Fetching...", Type = "info", Duration = 4 })
+                    task.spawn(function()
+                        local ok, result = mediaSys.Save(cleanUrl, ZenthraUI.Flags.gui_bg_save_name)
+                        if not ok then
+                            ZenthraUI:Notify({ Title = "Background", Content = tostring(result), Type = "error", Duration = 5 })
+                            return
+                        end
+                        ZenthraUI.Flags.gui_background_image = result
+                        pcall(Internal.Config.Save)
+                        applyBg(result)
+                        if bgDropdown and bgDropdown.SetOptions then
+                            bgDropdown:SetOptions(mediaSys.List())
+                            pcall(bgDropdown.Set, bgDropdown, result)
+                        end
+                        ZenthraUI:Notify({ Title = "Background", Content = "Applied: " .. tostring(result), Type = "success", Duration = 3 })
+                    end)
+                end,
+            })
+
+            bgMod:Button({
+                Title = "Refresh List",
+                Callback = function()
+                    if bgDropdown and bgDropdown.SetOptions then
+                        bgDropdown:SetOptions(mediaSys.List())
+                    end
+                end,
+            })
+
+            local deleteConfirm = false
+            bgMod:Button({
+                Title = "Delete Background",
+                Callback = function()
+                    local name = ZenthraUI.Flags.gui_background_image
+                    if type(name) == "table" then
+                        name = name[1]
+                    end
+                    if not name or name == "None" or name == "" then
+                        deleteConfirm = false
+                        ZenthraUI:Notify({
+                            Title = "Background",
+                            Content = "Select an image first",
+                            Type = "error",
+                            Duration = 3,
+                        })
+                        return
+                    end
+                    if not deleteConfirm then
+                        deleteConfirm = true
+                        ZenthraUI:Notify({
+                            Title = "Background",
+                            Content = "Are you sure? Click again to delete '" .. tostring(name) .. "'",
+                            Type = "warning",
+                            Duration = 5,
+                        })
+                        task.delay(5, function()
+                            deleteConfirm = false
+                        end)
+                        return
+                    end
+                    deleteConfirm = false
+                    local ok, result = mediaSys.Delete(name)
+                    if ok then
+                        ZenthraUI.Flags.gui_background_image = "None"
+                        pcall(Internal.Config.Save)
+                        mediaSys.Stop(window)
+                        if bgDropdown and bgDropdown.SetOptions then
+                            bgDropdown:SetOptions(mediaSys.List())
+                        end
+                        if bgDropdown and bgDropdown.Set then
+                            pcall(bgDropdown.Set, bgDropdown, "None")
+                        end
+                        ZenthraUI:Notify({
+                            Title = "Background",
+                            Content = "Deleted " .. tostring(result),
+                            Type = "info",
+                            Duration = 3,
+                        })
+                    else
+                        ZenthraUI:Notify({ Title = "Background", Content = tostring(result), Type = "error", Duration = 4 })
+                    end
+                end,
+            })
+
+            task.defer(function()
+                mediaSys.SetOpacity(tonumber(ZenthraUI.Flags.gui_bg_image_opacity) or 0.45, window)
+                applyBg()
+            end)
+        end
+    end)
+
+    local startMinimized = Internal.State.Saved.zenthra_start_minimized == true
+
+    task.defer(function()
+        if startMinimized then
+            window.Open = false
+            holder.Visible = false
+            shadow.Visible = false
+        else
+            window:SetVisible(true)
+        end
+    end)
+
+    local isDragging = false
+    local dragStart = nil
+    local startPos = nil
+    local moved = false
+
+    Internal.Util.Connect(topbar.InputBegan, function(input)
+        if Internal.Window.BlockDrag then
+            return
+        end
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        isDragging = true
+        moved = false
+        dragStart = input.Position
+        startPos = holder.Position
+    end)
+
+    Internal.Util.Connect(UserInput.InputChanged, function(input)
+        if not isDragging then
+            return
+        end
+        if input.UserInputType ~= Enum.UserInputType.MouseMovement and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        local delta = input.Position - dragStart
+        if 3 < delta.Magnitude then
+            moved = true
+        end
+        holder.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X / uiScale.Scale, startPos.Y.Scale, startPos.Y.Offset + delta.Y / uiScale.Scale)
+    end)
+
+    Internal.Util.Connect(UserInput.InputEnded, function(input)
+        if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then
+            return
+        end
+        local wasClick = isDragging and not moved
+        isDragging = false
+        if wasClick and window.CompactPillActive and window.CompactPillActive() then
+            window:Toggle()
+        end
+    end)
+
+    table.insert(ZenthraUI.Windows, window)
+    return window
+end
+
+local function wrapApi(fn)
+    return function(self, ...)
+        if self == ZenthraUI then
+            return fn(...)
+        end
+        return fn(self, ...)
+    end
+end
+
+ZenthraUI.Window = wrapApi(Internal.Window.Open)
+ZenthraUI.Notify = wrapApi(Internal.Notify.Push)
+ZenthraUI.SetTheme = wrapApi(Internal.Theme.Set)
+ZenthraUI.SetAccent = wrapApi(Internal.Theme.SetAccent)
+ZenthraUI.ResetTheme = wrapApi(Internal.Theme.Reset)
+ZenthraUI.SetNotifyPosition = wrapApi(Internal.Notify.SetPosition)
+ZenthraUI.GetNotifyPosition = wrapApi(Internal.Notify.GetPosition)
+ZenthraUI.OnBindsChanged = wrapApi(Internal.Binds.OnChanged)
+ZenthraUI.SaveConfig = wrapApi(Internal.Config.Save)
+ZenthraUI.GetFlag = wrapApi(function(flag)
+    return ZenthraUI.Flags[flag]
+end)
+
+local existing = getgenv and getgenv()._ZenthraUI
+if type(existing) == "table" and type(existing.Unload) == "function" then
+    pcall(existing.Unload)
+end
+
+getgenv()._ZenthraUI = {
+    Unload = function()
+        for _, conn in ipairs(Internal.State.Connections) do
+            pcall(function()
+                conn:Disconnect()
+            end)
+        end
+        table.clear(Internal.State.Connections)
+        for _, window in ipairs(ZenthraUI.Windows) do
+            pcall(function()
+                window:Destroy()
+            end)
+        end
+    end
+}
+
+return ZenthraUI
